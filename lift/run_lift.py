@@ -507,6 +507,93 @@ def desync_fix_patches(target):
     return p
 
 
+def crash_fix_patches(target):
+    """CnCNet's fixes of the crashes its players reported (refs/yrpp-spawner
+    Bugfixes.CommonCrashes.cpp, Bugfixes.ExceptionCatch.cpp; refs/yr-patches
+    fix_common_crashes.asm, exception_catch.c), each checked against the code
+    and written anew as a test before the faulting instruction: the lift has
+    no SEH to resume at (natively a fault ends the process; in the browser a
+    guest NULL is memory, and a call through a bad pointer leaves the stack
+    a slot or more off). One line on stderr when a check first takes its way
+    out. RA2_PROJECT.md 9.25 has the findings."""
+    if target != 'gamemd':
+        return {}
+    tag = ' /* crash fix: run_lift.py crash_fix_patches */'
+
+    def once(what):
+        return '{ static int _once; if (!_once++) fprintf(stderr, "[crash-fix] %s\\n"); } ' % what
+
+    def alive(array, reg):                     # reg in the DynamicVectorClass at array (Items +4, Count +0x10)
+        return ('uint32_t _o = %s, _it = MEM32(0x%Xu), _n = MEM32(0x%Xu), _i; '
+                'for (_i = 0; _i < _n && MEM32(_it + 4u * _i) != _o; _i++); ' % (reg, array + 4, array + 0x10))
+    BUILDINGS, UNITS = 0x00A8EB40, 0x008B4108   # BuildingClass::Array, UnitClass::Array (YRpp)
+    p = {}
+    # 1. ObjectClass::Mark (0x5F5850) asks an object GetOwningHouseIndex (vtable +0x38, a const
+    #    getter; a techno's is 0x6F9DB0: owner+0x30) and drops the answer; an ownerless one crashed
+    #    there (0x6F9DB6). The call goes.
+    for va in (0x005F58CB, 0x005F58CD, 0x005F58CF):
+        p[va] = '@replace:/* 0x%08X: GetOwningHouseIndex, its answer unused: not called */' % va + tag
+    # 2. TriggerTypeClass::ComputeCRC (0x727B30): its House (+0xA4) taken without the test its three
+    #    other fields have (a trigger of no house); skipped then, as they are (the sync CRC's part).
+    p[0x00727B44] = ('@replace:if (eax) { eax = eax + 4; /* 0x00727B44: add eax, 4 */' + tag)
+    p[0x00727B50] = '} else ' + once('a trigger type of no house: its CRC without one (0x727B44)') + tag
+    # 3. TechnoClass::GetOriginalOwner (0x70F820): a controller without a CaptureManager (+0x2BC);
+    #    then the techno's own owner, as for one not controlled (0x70F837, ecx still the techno).
+    p[0x0070F82A] = ('@replace:if (!MEM32(eax + 0x2BCu)) { ' + once('a mind controller without its manager (0x70F82A)') +
+                     'goto L_0070F837; } PUSH32(esp, ecx); /* 0x0070F82A: push ecx */' + tag)
+    # 4. TechnoClass::Revealed (0x6F4960), revealed to the player: the owner's three flags written
+    #    with no owner (+0x21C). Only those writes wait on one; the techno's own flag and its tag's
+    #    event stay (CnCNet's jump to 0x6F4A31 left those out too).
+    p[0x006F49DE] = ('@replace:if (eax) MEM8(eax + 0x5778) = (uint8_t)(LO8(ebx)); else ' + once('revealed, of no house (0x6F49DE)') +
+                     '/* 0x006F49DE: mov byte ptr [eax + 0x5778], bl */' + tag)
+    p[0x006F49EA] = '@replace:if (ecx) MEM8(ecx + 0x5779) = (uint8_t)(LO8(ebx)); /* 0x006F49EA: mov byte ptr [ecx + 0x5779], bl */' + tag
+    p[0x006F4A25] = '@replace:if (eax) MEM8(eax + 0x1F4) = (uint8_t)(LO8(ebx)); /* 0x006F4A25: mov byte ptr [eax + 0x1f4], bl */' + tag
+    # 5. 0x70AF50: the owner's type (+0x21C, +0x34) read with no owner: its end, false (eax 0), as
+    #    when its first test fails (0x70AF60).
+    p[0x0070AF6C] = ('@replace:if (!eax) { ' + once('no owner (0x70AF6C)') + 'goto L_0070B1C7; } '
+                     'ecx = MEM32(eax + 0x34); /* 0x0070AF6C: mov ecx, dword ptr [eax + 0x34] */' + tag)
+    # 6. Reinforcements (0x65D8E0): the owner's edge (+0x1E0) read with no owner: edge 0 (yr-patches';
+    #    the spawner's hook returns to 0x70B1C7, another function's end: copied from 5 by mistake).
+    p[0x0065DC17] = ('@replace:if (!ecx) { ' + once('reinforcements of no house (0x65DC17)') + 'eax = 0; goto L_0065DC2B; } '
+                     'eax = MEM32(ecx + 0x1E0); /* 0x0065DC17: mov eax, dword ptr [ecx + 0x1e0] */' + tag)
+    # 7. EBolt's ClearOwner (0x4C2C10) clears its unit's bolt (+0x6DC) through the bolt's owner, which
+    #    a unit gone without clearing it leaves dangling (0x4C2C19). Written only to a unit still in
+    #    UnitClass::Array; the bolt's own pointer is cleared all the same. (yr-patches' change to
+    #    SetOwner, 0x4C2BD0, never takes: its one caller, 0x6FD570, tests the same first.)
+    p[0x004C2C19] = ('@replace:{ ' + alive(UNITS, 'eax') + 'if (_i < _n) MEM32(eax + 0x6DC) = edx; else ' +
+                     once("an electric bolt's unit gone: its bolt not cleared through it (0x4C2C19)") +
+                     '} /* 0x004C2C19: mov dword ptr [eax + 0x6dc], edx */' + tag)
+    # 8. StartingPositionsToHouseBaseCells (0x5D6BE0): a house's start (+0x16058) indexes the start
+    #    cells (the vector at [esp+8]: Items [esp+0xC], Capacity [esp+0x10]) unchecked, and writes the
+    #    scenario's table by it; out of range (a map short of start waypoints), that house is left out.
+    p[0x005D6C1D] = ('@replace:if ((uint32_t)esi >= MEM32(esp + 0x10u) || !MEM32(esp + 0xCu)) { ' +
+                     once("a house's start outside the map's start cells (0x5D6C21)") + 'goto L_005D6C36; } '
+                     'eax = MEM32(esp + 0xC); /* 0x005D6C1D: mov eax, dword ptr [esp + 0xc] */' + tag)
+    # 9. Surface::GetPixel (0x7BAE60): Lock(x, y) makes the address unbounded; outside the surface
+    #    (Width +4, Height +8) the pixel is 0, by the way Lock's failure takes (nothing locked).
+    #    CnCNet resumed after the read, leaving the surface locked.
+    p[0x007BAE6F] = ('if ((uint32_t)eax >= MEM32(esi + 4u) || (uint32_t)ecx >= MEM32(esi + 8u)) { ' +
+                     once('a pixel asked outside its surface: 0 (0x7BAE60)') + 'ebx = 0; goto L_007BAEA8; }' + tag)
+    # (CnCNet's 0x7BC806, BlitPlain's row copy faulting: its pointers come from Lock, which fails on
+    # Windows when a surface is lost, never in win32hle's ddraw.c: not taken.)
+    # 11. The StructureTab command (0x535D90) starts placing the last building completed
+    #     (0xB0FE5C, set on EVA_ConstructionComplete, 0x6A8B30), cleared on placing but not when the
+    #     building goes first: one no longer in BuildingClass::Array is not used, and forgotten.
+    p[0x00535DB3] = ('@replace:{ ' + alive(BUILDINGS, 'eax') + 'if (_i == _n) { ' +
+                     once('StructureTab: the last building completed is gone (0x535DB3)') +
+                     'MEM32(0xB0FE5Cu) = 0; eax = 0; goto L_00535DCE; } } '
+                     'edx = MEM32(eax); /* 0x00535DB3: mov edx, dword ptr [eax] */' + tag)
+    # 12. Keyboard (0x55DEE0): a command's Execute(key) (thiscall, ret 4) that tail-jumps through a
+    #     dead object's NULL (Yuri Prime's mind-controlled building, CnCNet: eip 0 with 0x55E018 on
+    #     the stack) comes back here with its return address and its key still on the stack (a lifted
+    #     tail jump returns, an unresolved one pops nothing): the stack set to where Execute's own
+    #     `ret 4` leaves it.
+    p[0x0055E015] = ('@replace:{ uint32_t _sp = esp; RECOMP_ICALL(MEM32(edx + 0x20)); /* 0x0055E015: call dword ptr [edx + 0x20] */ '
+                     'if (esp != _sp + 4u) { ' + once("a hotkey's command did not return: the stack set back (0x55E015)") +
+                     'esp = _sp + 4u; } }' + tag)
+    return p
+
+
 def online_patches(target):
     """CnCNet's fixes for online play (refs/yr-patches, refs/yrpp-spawner), redone here.
 
@@ -563,7 +650,7 @@ def targets():
                        title="Yuri's Revenge", game_frame=0x00A8ED84, stamp=0x3BDF544E,
                        patches=lambda code, cs: {**sidebar_rows_patches(code, cs), **HD_VOXEL_PATCHES,
                                                  **modern_controls_patches('gamemd'), **queue_five_patches('gamemd'),
-                                                 **clip_line_patches('gamemd'), **desync_fix_patches('gamemd'), **online_patches('gamemd')}),
+                                                 **clip_line_patches('gamemd'), **desync_fix_patches('gamemd'), **online_patches('gamemd'), **crash_fix_patches('gamemd')}),
         'game': dict(exe=os.path.join(_GAME, 'game.exe'),
                      catalog=os.path.join(_LIFT, 'game', 'functions.json'),
                      seeds=os.path.join(_LIFT, 'game', 'rtti_seeds.json'),
