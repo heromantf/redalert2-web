@@ -170,12 +170,34 @@ void hle_yield(void) {
 
 /* ------------------------------------------------------------- dispatch
  * recomp_lookup searches the generated dispatch table (declared extern in
- * recomp_types.h; defined by the lifted program, or the selftest). */
+ * recomp_types.h; defined by the lifted program, or the selftest).
+ *
+ * Every RECOMP_ICALL comes through here: each virtual call, each call through
+ * a function pointer, each call of an import through the IAT. A binary search
+ * of Yuri's Revenge's 24,936 entries was a quarter of the game's own CPU time
+ * in a skirmish (sampled). So, in front of it:
+ *  - the table's range: an import's VA is a shim VA (SHIM_BASE, above any
+ *    image), which the search walked to the end of the table for every call;
+ *  - a direct-mapped cache of table indices. The table is constant, so an
+ *    index found once stays right; a slot holds index + 1 (0: empty) and a hit
+ *    is checked against the entry's own address, so a slot another thread is
+ *    rewriting at that moment reads as a miss, never as the wrong function. */
+#define LOOKUP_BITS 14
+static uint32_t g_lookup_cache[1u << LOOKUP_BITS];
+
 recomp_func_t recomp_lookup(uint32_t va) {
-    uint32_t lo = 0, hi = recomp_dispatch_count;
+    uint32_t n = recomp_dispatch_count;
+    if (!n || va < recomp_dispatch_table[0].address || va > recomp_dispatch_table[n - 1].address) return NULL;
+    uint32_t h = (va * 0x9E3779B1u) >> (32 - LOOKUP_BITS);
+    uint32_t c = __atomic_load_n(&g_lookup_cache[h], __ATOMIC_RELAXED);
+    if (c && recomp_dispatch_table[c - 1].address == va) return recomp_dispatch_table[c - 1].func;
+    uint32_t lo = 0, hi = n;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2, m = recomp_dispatch_table[mid].address;
-        if (m == va) return recomp_dispatch_table[mid].func;
+        if (m == va) {
+            __atomic_store_n(&g_lookup_cache[h], mid + 1, __ATOMIC_RELAXED);
+            return recomp_dispatch_table[mid].func;
+        }
         if (m < va) lo = mid + 1; else hi = mid;
     }
     return NULL;
