@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-# play-args.py T: tools/playtest.py's skirmish-build play (deploy the MCV, a power plant, a barracks, a GI),
-# from script time T on, as host arguments, one a line (a battle's events for the sync check to cover)
+# play-args.py T [spam]: tools/playtest.py's skirmish-build play (deploy the MCV, a power plant, a barracks, a GI),
+# from script time T on, as host arguments, one a line (a battle's events for the sync check to cover).
+# spam: first everything on screen band-selected and scattered (X) every 0.25 s from 3.25 s to 10.25 s into the
+# battle: a SCATTER event a unit each time, across Protocol Zero's first switch of MaxAhead (frames 256-271:
+# spike/protocol-zero). (Orders by clicks on the ground are no good there: the view still moves.)
 import sys
 t = float(sys.argv[1]); out = []
 def at(dt, *a):
@@ -9,6 +12,9 @@ PLACES = [(330, 250), (150, 250), (236, 320), (330, 320), (120, 170), (130, 330)
           (360, 360), (90, 260), (400, 280), (236, 390), (110, 400), (380, 420), (70, 150)]
 def place():
     for x, y in PLACES: at(1, '--click', f'{x},{y}')
+if sys.argv[2:] == ['spam']:
+    at(1, '--key', '0x48'); at(1.5, '--drag', '8,8,464,440')
+    for i in range(29): at(0.25, '--key', '0x58')
 at(1, '--move', '236,240'); at(10, '--key', '0x48'); at(2, '--click', '236,213'); at(1, '--key', '0x44')
 at(1, '--waitlog', 'Adding event DEPLOY')
 at(8, '--move', '523,251'); at(1, '--click', '523,251'); at(28, '--move', '523,251'); at(1, '--click', '523,251'); place()
