@@ -616,6 +616,68 @@ def online_patches(target):
     }
 
 
+def bugfix_patches(target):
+    """Bugs of the game as shipped that CnCNet fixes (refs/yrpp-spawner src/Misc/Bugfixes*.cpp,
+    refs/yr-patches: GPL-3.0, read for what they found), each checked in IDA, tried before and
+    after where it can be (docs/browser.md), and written anew. None touches the game's state:
+    in lockstep play they cannot unsync."""
+    if target != 'gamemd':
+        return {}
+    tag = ' /* bug fix: run_lift.py bugfix_patches */'
+    keep = 'uint32_t _da = eax, _dc = ecx, _dd = edx; '
+    back = 'eax = _da, ecx = _dc, edx = _dd; '
+    p = {}
+    # 1. A map smaller than the view. The tactical view's limits (0x6D8640, ClampTacticalPos:
+    #    min x = view w/2 + 30 (2 visible x - map w), max x = min x + 60 visible w - view w, y alike)
+    #    cross when the map's visible part is narrower or shorter than the view: a position is set to
+    #    one, then the other, and the view jumps (of the game's 161 maps 52 at 3840x2160, 13 at
+    #    2560x1440, TurfWar at 1920x1080). Both are their middle then, as CnCNet's: the view centred.
+    #    Here, ahead of the first compare: min x in edi, max x in esi, min y in ecx, max y in eax.
+    p[0x006D86BE] = ('@before:{ if ((int32_t)esi < (int32_t)edi) edi = esi = (uint32_t)(((int32_t)edi + (int32_t)esi) / 2); '
+                     'if ((int32_t)eax < (int32_t)ecx) ecx = eax = (uint32_t)(((int32_t)ecx + (int32_t)eax) / 2); }' + tag)
+    #    The view's parts beside such a map, where no cell is drawn, black (wasi/fixes.c), in the
+    #    tactical render once its map is drawn (0x6D4934, 0x6D3D10).
+    p[0x006D4934] = '@before:{ extern void ra2_fix_map_edges(void); RECOMP_CALL(ra2_fix_map_edges); }' + tag
+    #    The radar's frame of the view (RadarClass +0x14DC, just set) kept inside the radar's
+    #    picture of the map (+0x149C): the game moves it in (0x6570AD-0x657134: x + w at most the
+    #    picture's x + w - 1, y alike), which a frame wider or taller than the picture cannot be.
+    #    Such a frame made as wide or tall as the game's own rule lets one be (the picture's less
+    #    one), then moved in as the game does; a frame that fits comes out as the game left it.
+    p[0x00657134] = ('@before:{ uint32_t _r = esi + 0x149Cu, _v = esi + 0x14DCu; '
+                     'int32_t _rx = (int32_t)MEM32(_r), _ry = (int32_t)MEM32(_r + 4), _rw = (int32_t)MEM32(_r + 8), _rh = (int32_t)MEM32(_r + 12); '
+                     'int32_t _vw = (int32_t)MEM32(_v + 8), _vh = (int32_t)MEM32(_v + 12), _vx = (int32_t)MEM32(_v), _vy = (int32_t)MEM32(_v + 4); '
+                     'if (_rw > 1 && _rh > 1 && (_vw > _rw - 1 || _vh > _rh - 1)) { '
+                     'if (_vw > _rw - 1) _vw = _rw - 1; if (_vh > _rh - 1) _vh = _rh - 1; '
+                     'if (_vx < _rx) _vx = _rx; else if (_vx + _vw >= _rx + _rw) _vx = _rx + _rw - _vw - 1; '
+                     'if (_vy < _ry) _vy = _ry; else if (_vy + _vh >= _ry + _rh) _vy = _ry + _rh - _vh - 1; '
+                     'MEM32(_v) = (uint32_t)_vx; MEM32(_v + 4) = (uint32_t)_vy; MEM32(_v + 8) = (uint32_t)_vw; MEM32(_v + 12) = (uint32_t)_vh; } }' + tag)
+    # 2. A map's terrain (IsoMapPack5, 0x4ACE70) is read, still compressed, into a 640x400 16-bit
+    #    surface of 512,000 bytes; what does not fit is left out (a big map's last rows: clear land
+    #    at height 0). 1024x768, 1,572,864 bytes, the three together (the read's size is their
+    #    product); the game's own maps use 41 % of the old at most (XMP20T6, 207,587 bytes).
+    p[0x004AD343] = '@replace:PUSH32(esp, 0x300u); /* 0x004AD343: push 0x190: 768 high */' + tag
+    p[0x004AD348] = '@replace:PUSH32(esp, 0x400u); /* 0x004AD348: push 0x280: 1024 wide */' + tag
+    p[0x004AD356] = '@replace:PUSH32(esp, 0x00180000u); /* 0x004AD356: push 0x7d000: 1024 * 768 * 2 */' + tag
+    # 3. Do_Blit (0x4F4780) sleeps 50 ms before the mouse restores the cursor (WWMouse vtable +0x40,
+    #    0x7B92D0), which does nothing unless the mouse is captured (+0x1C, IsCaptured): the loading
+    #    screen's blits, uncaptured, waited for nothing. Slept only when captured.
+    p[0x004F4B8E] = ('@before:{ ' + keep + 'ecx = MEM32(0x887640u); RECOMP_ICALL(MEM32(MEM32(ecx) + 0x1Cu)); '
+                     'uint32_t _captured = LO8(eax); ' + back + 'if (!_captured) goto L_004F4B96; }' + tag)
+    # 4. Waiting for the other players (dialog 0xEA, 0x648710): on Windows its first control, Leave
+    #    Game (IDCANCEL), gets the focus as the dialog is shown (the dialog manager's first tab
+    #    stop), and Space, meant for the game, presses it. win32hle gives the dialog itself the
+    #    focus then (measured: Space and Enter went to the dialog, which did nothing), so it does
+    #    not show here; the focus taken off (SetFocus(0)) once the dialog is shown, as CnCNet's, so
+    #    it cannot whatever has it.
+    p[0x00648CCC] = '@before:{ ' + keep + 'PUSH32(esp, 0u); RECOMP_ICALL(MEM32(0x7E13CCu)); /* SetFocus(0) */ ' + back + '}' + tag
+    # 5. The type-select key pressed twice in 500 ms selects every unit of the type on the map
+    #    (0x732950), then asks for the whole screen redrawn (MapClass FlagToRedraw(1), 0x4F42F0):
+    #    pressed again and again, a full redraw each time. Not asked: the selection shows as the
+    #    view is drawn anyway.
+    p[0x00732CED] = '@before:goto L_00732CF9;' + tag
+    return p
+
+
 # Protocol Zero, CnCNet's latency control for online play (refs/yrpp-spawner
 # src/Spawner/ProtocolZero*.cpp, src/Ext/Event/Body.cpp: GPL-3.0, read for what
 # it found, the places, conditions and constants; written anew here, its logic
@@ -725,7 +787,7 @@ def targets():
                        patches=lambda code, cs: {**sidebar_rows_patches(code, cs), **HD_VOXEL_PATCHES,
                                                  **modern_controls_patches('gamemd'), **queue_five_patches('gamemd'),
                                                  **clip_line_patches('gamemd'), **desync_fix_patches('gamemd'), **online_patches('gamemd'), **crash_fix_patches('gamemd'),
-                                                 **protocol_zero_patches('gamemd')}),
+                                                 **protocol_zero_patches('gamemd'), **bugfix_patches('gamemd')}),
         'game': dict(exe=os.path.join(_GAME, 'game.exe'),
                      catalog=os.path.join(_LIFT, 'game', 'functions.json'),
                      seeds=os.path.join(_LIFT, 'game', 'rtti_seeds.json'),

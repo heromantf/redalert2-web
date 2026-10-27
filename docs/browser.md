@@ -334,3 +334,64 @@ by `SAVE0002.SAV` and no second file, a damaged zip and a file that is no zip
 refused; the exported zip read by Python's `zipfile` (`testzip` clean) and
 macOS's `unzip`. The panel's buttons on the play page: no saves, the export
 off; a zip imported, "这个浏览器里有 2 个存档", the export on and exporting both.
+
+**The game's own bugs that CnCNet fixes (2026-10-28).** Five, in the lift
+(`lift/run_lift.py` `bugfix_patches`, one `wasi/fixes.c`), each where CnCNet
+found it (yrpp-spawner `src/Misc/Bugfixes.cpp`,
+`Bugfixes.ClampTacticalPos.cpp`, `Bugfixes.IsoMapPack5Limit.cpp`; yr-patches'
+type select: GPL-3.0, read, not copied), checked in IDA and written anew.
+None touches the game's state, so none can unsync a network game.
+- **A map smaller than the view.** The view's limits (0x6D8640: x from
+  `view w / 2 + 30 (2 visible x - map w)` to that `+ 60 visible w - view w`,
+  y from `view h / 2 + 15 (map w + 2 visible y - 5)` to that
+  `+ (60 visible h + 270) / 2 - view h`) cross when the map's visible part is
+  narrower or shorter than the view, and the view is set to one, then the
+  other: of the game's 161 maps 52 at 3840x2160, 13 at 2560x1440, 19 at
+  3440x1440, TurfWar at 1920x1080. Both are their middle then (0x6D86BE), as
+  CnCNet's: the view centred. The view beside the map, where no cell is drawn
+  and the composite surface held whatever it last did, is filled black once
+  the map is drawn (0x6D4934, `wasi/fixes.c`, from the limits before they are
+  centred: the map's edges). The radar's frame of the view is kept inside its
+  picture of the map (0x657134): the game moves it in so that its x + width
+  is at most the picture's x + width - 1, which a frame wider than the
+  picture cannot be; it is made the picture's width less one then (CnCNet's
+  makes it the whole width, one more than the game itself ever leaves) and
+  moved in, and a frame that fits is left as the game set it. Checked: TurfWar
+  at 1920x1080 (the view 1752x1048, y's limits 2369 and 2146) black 112
+  pixels above the map and 111 below; The Alamo at 3840x2160 (the view
+  3672x2128) 156 left and right, 247 above and 246 below, its base's edge
+  where the band ends; The Alamo at 1920x1080 the
+  same view as the build before, nothing filled. The radar's part needs a
+  radar on such a map: not seen.
+- **A big map's terrain.** The map's cells (`IsoMapPack5`) are read, still
+  packed, into a 640x400 16-bit surface (0x4AD343-0x4AD356), 512,000 bytes:
+  what is past it is cut (`Get_UUBlock`, 0x526FB0) and its cells left clear
+  land at height 0. The surface 1024x768 now, 1,572,864 bytes, as CnCNet's.
+  The game's own maps use 41 % of the old at most (XMP20T6, 207,587 bytes).
+  Checked with a map past it: The Alamo with its cells after 50,000 copies of
+  its first (the same cell set again), each block packed as literals only
+  (LZO1X, so 631,694 bytes packed, 123 % of the old size, 40 % of the new), a
+  loose `XMP29U2.MAP` in the game folder: the build before showed clear land
+  for its roads, lots and fields, this one The Alamo as shipped.
+- **The loading screen's waits.** Do_Blit (0x4F4780) sleeps 50 ms before the
+  mouse puts the cursor back (WWMouse +0x40, 0x7B92D0), which does nothing
+  unless the mouse is captured (+0x1C): the loading screen's blits waited for
+  nothing. Slept only when captured (0x4F4B8E). Measured: a skirmish's
+  loading (The Alamo, 1920x1080, under Node) 15.1 s twice before, 11.7 and
+  11.5 s now.
+- **Type select pressed again and again** (0x732CC0): twice in 500 ms selects
+  every unit of the type on the map, then asks for the whole screen redrawn
+  (FlagToRedraw(1), 0x4F42F0); not asked now (0x732CED to 0x732CF9, as
+  yr-patches'): the selection shows as the view is drawn anyway. Not measured.
+- **Waiting for the other players** (dialog 0xEA, 0x648710). On Windows its
+  first control, Leave Game (IDCANCEL), gets the focus as the dialog is shown
+  (the dialog manager's first tab stop), and Space, meant for the game (it
+  jumps to the last event), presses it: the player has left. The focus is
+  taken off once it is shown (SetFocus(0) at 0x648CCC, as CnCNet's). Here the
+  bug does not show: win32hle gives the dialog itself the focus as it is
+  shown. Tried before the fix (a pair, Alice under Node stopped for 45 s
+  40 s into the battle, Bob in Chrome): Space and Enter at 3 and
+  6 s went to the dialog (a log of win32hle's key target), which did nothing;
+  Bob waited its 30 s and removed Alice. After it the same: nothing on Space
+  or Enter, Alice removed after 30 s, both on to the score screen. The patch
+  stays, so that it cannot whatever win32hle's focus does.

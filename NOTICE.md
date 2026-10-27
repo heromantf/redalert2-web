@@ -91,7 +91,11 @@ wrappers, each computed as its source computes it:
   against the game's code, none of their code used. So does Protocol Zero,
   the spawner's latency control (`protocol_zero_patches`,
   `wasi/protocol_zero.c`): its sites, conditions and constants, and the ten
-  names of its latency levels in its message, the logic written anew.
+  names of its latency levels in its message, the logic written anew. And the
+  bugs of the game as shipped that the spawner and yr-patches fix
+  (`bugfix_patches`, `wasi/fixes.c`: a map smaller than the view, the
+  IsoMapPack5 limit, Do_Blit's wait, the wait dialog's focus, type select's
+  redraw): their addresses and limits, written anew.
 - **YRpp**: the game's structures and addresses (facts about the game).
 - **IPXEmu** (Jelle Geerts): win32hle's IPX over UDP (`win32hle/wsock32.c`)
   puts the same bytes on the wire, checked against its 1.0.4 source; none of

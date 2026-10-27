@@ -11,10 +11,12 @@ copy of the game; nothing of it is in this repository.
 - **Plays in Chrome** (the build is judged by Chrome; other browsers are not
   targeted for now): the menus, skirmishes and campaigns, the movies (FFmpeg's
   Bink decoder for wasm), sound (an AudioWorklet), saves and settings kept in
-  the site's storage (OPFS), the game data kept as it is read or downloaded
-  ahead from the start panel, full screen with the mouse and keys locked, and
-  the Steam release's two wrappers' screen filters (Shift+F11). The game as
-  shipped: none of the remaster's additions.
+  the site's storage (OPFS; the saves out to a zip and back), the game data
+  kept as it is read or downloaded ahead from the start panel, full screen
+  with the mouse and keys locked, and the Steam release's two wrappers' screen
+  filters (Shift+F11). The game as shipped, none of the remaster's additions,
+  with bugs that CnCNet fixes fixed too (`docs/browser.md`: a map smaller
+  than the screen, a big map's terrain, the loading screen's waits).
 - **Online**: pages play each other through a relay (`relay/`), the game's own
   LAN lobby, any number of rooms; the original's desyncs and the crashes
   CnCNet's players met are fixed in the lift, and the latency follows the
