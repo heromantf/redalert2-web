@@ -3,8 +3,11 @@
 //   go build -o ../out/relay . && ../out/relay -addr 127.0.0.1:8791 &   node test.mjs ws://127.0.0.1:8791/net
 // Joins, a broadcast (the sender gets it too), a unicast, the refusals (a name
 // taken, a second page of one browser, a different build on a LAN in use),
-// and a reconnect with the token (the same address back).
+// a reconnect with the token (the same address back), the counts in /status.
+// With a relay started with -test-delay MSms, give MS too: a datagram held as long.
+//   node test.mjs ws://127.0.0.1:8791/net [MS]
 const url = process.argv[2] ?? 'ws://127.0.0.1:8791/net';
+const delay = Number(process.argv[3] ?? 0);
 const BUILD = 'aaaabbbbccccdddd';
 let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) failed++; };
@@ -70,7 +73,17 @@ const a2 = client({ name: 'Alice', client: 'client-aaaa-1', token: wa.token });
 const wa2 = await a2.next(isWelcome);
 check(wa2 && wa2.ip === wa.ip, `Alice back with her token: ${wa2?.ip}`);
 b.ws.send(datagram(ip(wa.ip), 5000, 5000, [5]));
-check(!!(await a2.next(isBinary)), 'datagrams reach her again');
+check(!!(await a2.next(isBinary, delay + 2000)), 'datagrams reach her again');
+if (delay) {
+  const t0 = performance.now();
+  b.ws.send(datagram(ip(wa.ip), 5000, 5000, [6]));
+  const held = await a2.next(isBinary, delay + 2000), ms = performance.now() - t0;
+  check(held && ms >= delay - 2, `held by -test-delay: ${ms.toFixed(0)} ms for ${delay}`);
+}
+const status = await (await fetch(url.replace(/^ws/, 'http').replace(/\/net$/, '/status'))).json();
+const tr = status.lans.find((l) => l.lan === 'test')?.traffic;
+check(tr && tr.unicast >= 2 && tr.broadcast >= 1 && 'overRate' in tr && 'queueFull' in tr && 'testLost' in tr,
+  `/status counts: ${JSON.stringify(tr)}`);
 
 for (const x of [a2, b, c, d, e]) x.ws.close();
 console.log(failed ? `${failed} failed` : 'all passed');

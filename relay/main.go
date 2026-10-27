@@ -9,7 +9,7 @@
 // (wasi/net.c); this server only hands out addresses and switches datagrams.
 //
 //	go run . [-addr :8790] [-tls-cert FILE -tls-key FILE] [-origins PATTERN,...]
-//	         [-max-clients N] [-max-lan N]
+//	         [-max-clients N] [-max-lan N] [-test-delay D -test-jitter D -test-loss PCT]
 //
 // Joining: the first message is text, a JSON hello:
 //
@@ -45,7 +45,13 @@
 // token gets them back, and the game, which only sees datagrams, goes on.
 // The server pings every page each 15 s and closes one that does not answer.
 // GET /status: the LANs, who is on them and what they sent (broadcast or to
-// one address), as JSON.
+// one address) and what of it was dropped, as JSON.
+//
+// -test-delay, -test-jitter, -test-loss: for measuring the game over a path
+// like the internet's, not for play. Each datagram handed to a page waits the
+// delay, give or take up to the jitter (in their order still), or is lost by
+// the percentage. A datagram passes the relay once: the round trip between two
+// pages is twice the delay.
 package main
 
 import (
@@ -58,6 +64,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	mrand "math/rand/v2"
 	"net/http"
 	"regexp"
 	"sort"
@@ -79,7 +86,9 @@ const (
 	pingWait     = 10 * time.Second
 	helloWait    = 10 * time.Second
 	sendQueue    = 512
-	// a page's rate: the game sends a few dozen datagrams a second; far more is a fault or abuse
+	// a page's rate, far more than the game sends: in a game of 8, a datagram a frame to each of
+	// the 7 others with Protocol Zero at its first level (FrameSendRate 1), ~440 a second at 60 fps
+	// (329 measured at 45 fps, 366 at most; 66 with the game's own timing; docs/online.md)
 	ratePackets = 1000
 	rateBytes   = 1 << 20
 )
@@ -95,6 +104,10 @@ var (
 	// handed to every page, N pages N*N of them a second (docs/online.md): 128, ~10 MB/s at most.
 	maxClients = flag.Int("max-clients", 128, "pages on the server at most (0: no limit)")
 	maxLAN     = flag.Int("max-lan", 0, "pages on one LAN at most (its lobby; 0: no limit)")
+
+	testDelay  = flag.Duration("test-delay", 0, "tests: each datagram to a page held this long (the round trip: twice it)")
+	testJitter = flag.Duration("test-jitter", 0, "tests: the hold varied by up to this either way, the order kept")
+	testLoss   = flag.Float64("test-loss", 0, "tests: this percentage of the datagrams to pages lost")
 
 	validName  = regexp.MustCompile(`^[A-Za-z0-9 _-]{1,16}$`)
 	validBuild = regexp.MustCompile(`^[0-9a-f]{8,64}$`)
@@ -125,12 +138,19 @@ type member struct {
 	token  string
 	lan    *lan
 	conn   *websocket.Conn
-	send   chan []byte
+	send   chan outFrame
 	gone   time.Time
+	due    time.Time // -test-delay: when its last datagram is due
 	// rate: a second's window
 	window  time.Time
 	packets int
 	bytes   int
+}
+
+// a frame to a page: [0]=0 text (the rest JSON), else a datagram; due: held till then (-test-delay)
+type outFrame struct {
+	b   []byte
+	due time.Time
 }
 
 type lan struct {
@@ -147,6 +167,10 @@ type traffic struct {
 	Unicast        uint64 `json:"unicast"` // to one address on it
 	UnicastBytes   uint64 `json:"unicastBytes"`
 	Delivered      uint64 `json:"delivered"` // datagrams handed to pages: a broadcast once for each
+	// dropped: past the sender's rate (ratePackets, rateBytes), a page's queue full, lost by -test-loss
+	OverRate  uint64 `json:"overRate"`
+	QueueFull uint64 `json:"queueFull"`
+	TestLost  uint64 `json:"testLost"`
 }
 
 type hub struct {
@@ -200,7 +224,7 @@ func (l *lan) announce() {
 	for _, m := range l.byIP {
 		if m.conn != nil {
 			select {
-			case m.send <- append([]byte{0}, msg...): // 0: text, the rest JSON
+			case m.send <- outFrame{b: append([]byte{0}, msg...)}: // 0: text, the rest JSON
 			default:
 			}
 		}
@@ -227,7 +251,7 @@ func (h *hub) join(hi hello, conn *websocket.Conn) (*member, string) {
 		if m.conn != nil {
 			m.conn.Close(websocket.StatusPolicyViolation, "replaced by a reconnect")
 		}
-		m.conn, m.send, m.gone = conn, make(chan []byte, sendQueue), time.Time{}
+		m.conn, m.send, m.gone = conn, make(chan outFrame, sendQueue), time.Time{}
 		h.conns++
 		l.announce()
 		return m, ""
@@ -254,7 +278,7 @@ func (h *hub) join(hi hello, conn *websocket.Conn) (*member, string) {
 	if ip == 0 {
 		return nil, "full"
 	}
-	m := &member{ip: ip, name: hi.Name, client: hi.Client, token: randomHex(16), lan: l, conn: conn, send: make(chan []byte, sendQueue)}
+	m := &member{ip: ip, name: hi.Name, client: hi.Client, token: randomHex(16), lan: l, conn: conn, send: make(chan outFrame, sendQueue)}
 	l.byIP[ip] = m
 	h.tokens[m.token] = m
 	h.conns++
@@ -297,9 +321,7 @@ func (h *hub) route(m *member, frame []byte) {
 	}
 	m.packets++
 	m.bytes += len(frame)
-	if m.packets > ratePackets || m.bytes > rateBytes {
-		return
-	}
+	over := m.packets > ratePackets || m.bytes > rateBytes
 	dst := binary.BigEndian.Uint32(frame[1:5])
 	out := make([]byte, len(frame))
 	copy(out, frame)
@@ -307,14 +329,35 @@ func (h *hub) route(m *member, frame []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	t, n := &m.lan.traffic, uint64(len(frame)-frameHeader)
+	if over {
+		t.OverRate++
+		return
+	}
 	deliver := func(to *member) {
 		if to.conn == nil {
 			return
 		}
+		if *testLoss > 0 && mrand.Float64()*100 < *testLoss {
+			t.TestLost++
+			return
+		}
+		f := outFrame{b: out}
+		if *testDelay > 0 || *testJitter > 0 {
+			d := *testDelay
+			if *testJitter > 0 {
+				d += time.Duration(mrand.Int64N(int64(2**testJitter)+1)) - *testJitter
+			}
+			f.due = now.Add(d)
+			if f.due.Before(to.due) { // a datagram is not passed by a later one
+				f.due = to.due
+			}
+			to.due = f.due
+		}
 		select {
-		case to.send <- out:
+		case to.send <- f:
 			t.Delivered++
 		default: // its queue is full: a datagram lost, as on a LAN
+			t.QueueFull++
 		}
 	}
 	if dst == 0xFFFFFFFF || dst == netBroadcast {
@@ -386,8 +429,11 @@ func serveNet(w http.ResponseWriter, r *http.Request) {
 			select {
 			case <-ctx.Done():
 				return
-			case b := <-send:
-				typ := websocket.MessageBinary
+			case f := <-send:
+				if !f.due.IsZero() {
+					time.Sleep(time.Until(f.due))
+				}
+				b, typ := f.b, websocket.MessageBinary
 				if b[0] == 0 {
 					typ, b = websocket.MessageText, b[1:]
 				}
@@ -448,6 +494,9 @@ func main() {
 	http.HandleFunc("/net", serveNet)
 	http.HandleFunc("/status", serveStatus)
 	srv := &http.Server{Addr: *addr, ReadHeaderTimeout: 10 * time.Second}
+	if *testDelay > 0 || *testJitter > 0 || *testLoss > 0 {
+		log.Printf("[relay] TEST conditions: each datagram held %v (+-%v), %.1f%% lost", *testDelay, *testJitter, *testLoss)
+	}
 	var err error
 	if *tlsCert != "" {
 		log.Printf("[relay] wss://%s/net", *addr)
