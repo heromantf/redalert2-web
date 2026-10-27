@@ -79,6 +79,8 @@ typedef struct {
     SwrContext *swr;
     int stream;                   /* the sound's mixer stream */
     int paused, have_frame, done;
+    int at_end;                   /* the last frame done: no next frame to be time for */
+    int started;                  /* the clock running: from the first frame done, not BinkOpen */
     uint32_t start_ms, paused_at;
     float volume;
 } bink_t;
@@ -189,17 +191,28 @@ static void k_Open(void) {                               /* (name or handle, fla
     b->FrameRate = (uint32_t)v->avg_frame_rate.num, b->FrameRateDiv = (uint32_t)(v->avg_frame_rate.den ? v->avg_frame_rate.den : 1);
     if (!b->FrameRate) b->FrameRate = 15, b->FrameRateDiv = 1;
     b->FrameNum = 1, b->LastFrameNum = 0;
-    b->start_ms = hle_ticks_ms();
     fprintf(stderr, "[bink] %ux%u, %u frames at %u/%u fps%s\n", b->Width, b->Height, b->Frames, b->FrameRate,
             b->FrameRateDiv, b->stream >= 0 ? ", with sound" : "");
     RETP(b, 2);
 }
 static void k_Close(void) { if (A32(0)) close_bink((bink_t *)APTR(0)); RETV(1); }
 
+/* The clock starts with the first frame done: Yuri's Revenge opens a radar
+ * movie when it is queued (0x5C07D0), asks BinkWait about it at once, and
+ * has its first frame done 3.6 s later, the radar opened and the music faded
+ * out (0x6578F0); timed from BinkOpen or that BinkWait, every frame was due
+ * by then and the movie's 45 went by in 14 ms, its speech cut off. */
+static void clock_start(bink_t *b) {
+    if (b->started) return;
+    b->started = 1;
+    b->start_ms = hle_ticks_ms() - (uint32_t)((uint64_t)(b->FrameNum - 1) * 1000u * b->FrameRateDiv / b->FrameRate);
+}
 static void k_DoFrame(void) {                            /* decode the current frame */
     bink_t *b = (bink_t *)APTR(0);
+    clock_start(b);
     b->have_frame = decode_frame(b);
     b->LastFrameNum = b->FrameNum;
+    if (b->FrameNum >= b->Frames) b->at_end = 1;
     RET(0, 1);
 }
 static void k_NextFrame(void) {
@@ -207,10 +220,16 @@ static void k_NextFrame(void) {
     if (b->FrameNum < b->Frames) b->FrameNum++;
     RETV(1);
 }
-/* BinkWait: nonzero while it is not yet time for the next frame. */
+/* BinkWait: nonzero while it is not yet time for the next frame. FrameNum
+ * stays on the last frame, so once that frame is done it is never time
+ * again: a game that catches up in a loop, doing frames while BinkWait is 0
+ * (Yuri's Revenge's at 0x432E40, every movie of it, the radar's among them),
+ * comes out of it at the end instead of doing the last frame forever, and
+ * sees FrameNum at Frames, its sign of the end (0x432C50). */
 static void k_Wait(void) {
     bink_t *b = (bink_t *)APTR(0);
-    if (b->paused) RET(1, 1);
+    if (b->paused || b->at_end) RET(1, 1);
+    if (!b->started) RET(0, 1);                          /* the first frame: due now */
     uint64_t due = (uint64_t)(b->FrameNum - 1) * 1000u * b->FrameRateDiv / b->FrameRate;
     RET(hle_ticks_ms() - b->start_ms < due ? 1u : 0u, 1);
 }
@@ -218,7 +237,7 @@ static void k_Pause(void) {                              /* (bink, pause) -> the
     bink_t *b = (bink_t *)APTR(0);
     int p = A32(1) != 0;
     if (p && !b->paused) b->paused_at = hle_ticks_ms();
-    if (!p && b->paused) b->start_ms += hle_ticks_ms() - b->paused_at;
+    if (!p && b->paused && b->started) b->start_ms += hle_ticks_ms() - b->paused_at;
     b->paused = p;
     if (b->stream >= 0) hle_audio_stream_gain(b->stream, p ? 0.0f : b->volume);
     RET((uint32_t)p, 2);
@@ -235,8 +254,9 @@ static void k_Goto(void) {                               /* (bink, frame, flags)
     uint32_t to = A32(1) ? A32(1) : 1;
     av_seek_frame(b->fmt, b->vs, 0, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_BYTE);
     avcodec_flush_buffers(b->vdec);
-    b->done = 0, b->FrameNum = 1;
+    b->done = 0, b->at_end = 0, b->FrameNum = 1;
     while (b->FrameNum < to && decode_frame(b)) b->FrameNum++;
+    b->started = 1;
     b->start_ms = hle_ticks_ms() - (uint32_t)((uint64_t)(b->FrameNum - 1) * 1000u * b->FrameRateDiv / b->FrameRate);
     RETV(3);
 }
