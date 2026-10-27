@@ -439,6 +439,74 @@ def clip_line_patches(target):
             accept: reset, reject: reset}
 
 
+# Multiplayer desyncs of the original game (Yuri's Revenge), the fixes CnCNet's
+# spawner makes (yrpp-spawner src/Misc/Bugfixes.Desyncs.cpp; their findings,
+# written here anew). In lockstep play every machine must compute the same
+# game; these places let a machine's own view change the game's state:
+# - An aircraft's shadow is drawn with its height set to 0 for the moment
+#   (Set_Height, vtable +0x1CC, three calls), which picks it up from the map
+#   and puts it down again, recomputing the cells' attributes, but only where
+#   the aircraft is seen. The calls go (the argument popped, as the callee's
+#   `ret 4` would).
+# - Crates, flags, veinholes and bridges taken off a cell leave its land type
+#   stale (no CellClass::RecalcAttributes, 0x47D2B0), so pathfinding differs
+#   once an aircraft's shadow has refreshed the cell on one machine only:
+#   after each such write the cell is recomputed (level -1: kept), and for a
+#   bridge section gone or damaged the map's zones too (MapClass at 0x87F7E8:
+#   ResetZones 0x56D460 when the overlay went, RecalculateZones 0x56D5A0 when
+#   it changed, then RecalculateSubZones 0x584550; each takes the cell's
+#   MapCoords, at +0x24). Overlay index +0x44, overlay data +0x11E, level +0x11B.
+# - An invisible unit (TechnoType +0xC9A) gets a "behind" animation from
+#   TechnoClass 0x70F1D0 when its owner sees it as normal: owner-dependent,
+#   so none for an invisible one (its type: vtable +0x84).
+# - 0x5C0E30, a check whether to test a cell's shroud, answers no (`xor al,
+#   al`): yes, as CnCNet patches it.
+# eax, ecx and edx are kept across the calls (the code around may hold them);
+# the flags are each function's own and the calls leave them alone.
+def desync_fix_patches(target):
+    if target != 'gamemd':
+        return {}
+    keep = 'uint32_t _da = eax, _dc = ecx, _dd = edx; '
+    back = 'eax = _da, ecx = _dc, edx = _dd; '
+    tag = ' /* desync fix: run_lift.py desync_fix_patches */'
+
+    def recalc(cell):
+        return f'ecx = {cell}; PUSH32(esp, 0xFFFFFFFFu); RECOMP_CALL(sub_0047D2B0); '
+
+    def zones(cell, first):
+        return (f'ecx = 0x0087F7E8u; PUSH32(esp, {cell} + 0x24u); RECOMP_CALL({first}); '
+                f'ecx = 0x0087F7E8u; PUSH32(esp, {cell} + 0x24u); RECOMP_CALL(sub_00584550); ')
+
+    def cell_only(reg):
+        return '{ ' + keep + f'uint32_t _cell = {reg}; ' + recalc('_cell') + back + '}' + tag
+
+    def bridge(reg, first):
+        return '{ ' + keep + f'uint32_t _cell = {reg}; ' + recalc('_cell') + zones('_cell', first) + back + '}' + tag
+
+    gone, damaged = 'sub_0056D460', 'sub_0056D5A0'
+    p = {}
+    for va in (0x004147D5, 0x004147F3, 0x004148AB):          # the aircraft shadow's Set_Height(0) calls
+        p[va] = '@replace:esp += 4; RECOMP_FLAGS_OUT();' + tag
+    p[0x004A1BEF] = cell_only('ebx')                         # a crate taken (single player)
+    p[0x0056C1DA] = cell_only('ebx')                         # a crate taken (multiplayer)
+    p[0x004FBF3C] = ('@replace:' + cell_only('eax') +        # a flag taken: the cell in eax before its load
+                     ' eax = MEM32(0xA8EF98); /* 0x004FBF3C: mov eax, dword ptr [0xa8ef98] */')
+    p[0x0074C775] = bridge('eax', gone)                      # a veinhole's cells written
+    for va in (0x0056EFF2, 0x0056F392, 0x0056F956, 0x0056FD26, 0x005721C2, 0x005724E2, 0x00572882,
+               0x00572E46, 0x00573216, 0x0057779F, 0x005778BB):
+        p[va] = bridge('esi', gone)                          # a bridge section gone (overlay -1)
+    p[0x0074CBEE] = bridge('ebp', gone)
+    p[0x00576728] = bridge('esi', gone)                      # overlay data 0, then overlay -1
+    for va in (0x0056F712, 0x0056F71B, 0x0056F822, 0x0056F82B, 0x00572C02, 0x00572C0B, 0x00572D12, 0x00572D1B):
+        p[va] = bridge('eax', damaged)                       # a bridge section damaged (overlay data)
+    for va in (0x00572101, 0x005777FC):
+        p[va] = bridge('esi', damaged)
+    p[0x0070F1E5] = ('{ ' + keep + 'ecx = esi; RECOMP_ICALL(MEM32(MEM32(esi) + 0x84u)); uint32_t _type = eax; ' + back +
+                     'if (_type && MEM8(_type + 0xC9Au)) goto L_0070F659; }' + tag)
+    p[0x005C0E30] = '@replace:SET_LO8(eax, 1);' + tag        # mov al, 1 for xor al, al
+    return p
+
+
 def apply_patches(body, patches):
     """Add each patch's C after the line that lifts its instruction."""
     for va, c in patches.items():
@@ -474,7 +542,7 @@ def targets():
                        title="Yuri's Revenge", game_frame=0x00A8ED84, stamp=0x3BDF544E,
                        patches=lambda code, cs: {**sidebar_rows_patches(code, cs), **HD_VOXEL_PATCHES,
                                                  **modern_controls_patches('gamemd'), **queue_five_patches('gamemd'),
-                                                 **clip_line_patches('gamemd')}),
+                                                 **clip_line_patches('gamemd'), **desync_fix_patches('gamemd')}),
         'game': dict(exe=os.path.join(_GAME, 'game.exe'),
                      catalog=os.path.join(_LIFT, 'game', 'functions.json'),
                      seeds=os.path.join(_LIFT, 'game', 'rtti_seeds.json'),
