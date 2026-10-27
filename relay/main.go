@@ -24,7 +24,9 @@
 // The answer: {"t":"welcome","ip":"10.47.0.5","mask":"255.255.0.0","token":T,
 // "peers":[{"ip","name"}]} or {"t":"refused","why":"name|client|full|version|bad"}
 // and the connection closed. While joined, {"t":"peers","peers":[...]} each
-// time someone comes or goes.
+// time someone comes or goes; {"t":"ping","n":N} from a page is answered
+// {"t":"pong","n":N}, to it alone (its round trip to the relay, for the page
+// to show).
 //
 // Datagrams are binary frames, big-endian:
 //
@@ -458,6 +460,18 @@ func serveNet(w http.ResponseWriter, r *http.Request) {
 		}
 		if typ == websocket.MessageBinary {
 			h.route(m, data)
+		} else if typ == websocket.MessageText {
+			var c struct {
+				T string  `json:"t"`
+				N float64 `json:"n"`
+			}
+			if json.Unmarshal(data, &c) == nil && c.T == "ping" {
+				pong, _ := json.Marshal(map[string]any{"t": "pong", "n": c.N})
+				select {
+				case send <- outFrame{b: append([]byte{0}, pong...)}:
+				default:
+				}
+			}
 		}
 	}
 }

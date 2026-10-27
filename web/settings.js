@@ -54,7 +54,8 @@ const CSS = `
                font: 12px ui-monospace, monospace; white-space: pre; pointer-events: none; border-radius: 4px; }
   .ra2-stats[hidden] { display: none; }`;
 
-export function startMenu({ settings, presenter, screen, audio = () => null, memory = () => null, ctl = () => null, log = () => {} }) {
+export function startMenu({ settings, presenter, screen, audio = () => null, memory = () => null, ctl = () => null, latency = () => '',
+                           log = () => {} }) {
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   const menu = document.createElement('div'); menu.className = 'ra2-menu'; menu.hidden = true;
   menu.innerHTML = `<div class="box">
@@ -144,6 +145,7 @@ export function startMenu({ settings, presenter, screen, audio = () => null, mem
       `定时器 ${c ? (late ? `粗（晚醒 ${late.toFixed(1)} ms，短睡眠空转）` : '精细') : '—'}`,
       `声音   ${a ? `${a.state() === 'running' ? '播放中' : a.state()} · 欠载 ${a.underruns()} 次` : '—'}`,
       `鼠标   ${document.pointerLockElement ? `锁定（灵敏度 ${settings.sensitivity}%）` : '未锁定'}`,
+      `联机   ${latency() || '—'}`,
     ].join('\n');
   }, 500);
 

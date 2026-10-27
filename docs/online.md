@@ -191,3 +191,30 @@ own, for measuring).
   from 3 s to 10 s). Two games in one page (`tools/lan/two-games.sh`: Bob
   leaves the first, Alice wins, Continue, the Network lobby, Carol joins her
   second): each starts from the same values and raises again.
+
+## The latency on the page (2026-10-28)
+
+The status bar under the picture and the stats (Shift+F12, "联机") say how
+far the others are. In the lobby, the round trip to the relay: the page's
+network worker (`host/core/net.mjs`) sends `{"t":"ping","n":N}` every 2 s,
+the relay answers `{"t":"pong","n":N}` on that connection alone
+(`relay/main.go`; in order with the datagrams to that page, so behind any
+`-test-delay` holds), and the page shows the median of the last five ("延迟 N ms", "< 1 ms" on this
+machine); an older relay answers nothing and no number shows. In a LAN game,
+the game's own count: IPX's response time (0x542450, the worst of its
+connections' mean ack time, in 16 ms ticks) every 30 frames from the main
+loop (`wasi/protocol_zero.c` `net_show`; a -1, a connection with none
+measured yet, skipped as Protocol Zero's send skips it), and Protocol Zero's
+level, through three more words of the mailbox (`wasi/net.c`: 21 the main
+loop's rounds, 22 the response time, 23 the level; its version 3): "对局延迟
+约 X ms（等级 L）", "< 16 ms" under a tick. A game is told from the lobby by
+those rounds going on (the main loop runs only in a game). The 2-second
+reports carry `tick` and are not logged (`host/run.mjs`, the page's log),
+only the changes are. Checked in Chrome against Node: in the lobby "延迟 0
+ms" (shown as "< 1 ms" since), in the battle "对局延迟 < 16 ms（等级 1）" in the
+status bar and the stats alike; 5 status lines in the Node player's log over
+a 320 s game; `relay/test.mjs`: a ping answered, to its page alone.
+Over the relay's `-test-delay 50ms` (a round trip of 100 ms): "对局延迟 约 96
+ms（等级 3）" in the battle (6 ticks; level 3 as `spike/protocol-zero` measured
+at 100 ms), and in the lobby "< 1 ms", then 20 ms: the pong queued behind
+the datagrams held for the test.

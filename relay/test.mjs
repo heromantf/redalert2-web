@@ -80,6 +80,9 @@ if (delay) {
   const held = await a2.next(isBinary, delay + 2000), ms = performance.now() - t0;
   check(held && ms >= delay - 2, `held by -test-delay: ${ms.toFixed(0)} ms for ${delay}`);
 }
+b.ws.send(JSON.stringify({ t: 'ping', n: 7 }));
+const pong = await b.next((m) => m && m.t === 'pong');
+check(pong && pong.n === 7 && !(await a2.next((m) => m && m.t === 'pong', 300)), 'a ping answered, to its page alone');
 const status = await (await fetch(url.replace(/^ws/, 'http').replace(/\/net$/, '/status'))).json();
 const tr = status.lans.find((l) => l.lan === 'test')?.traffic;
 check(tr && tr.unicast >= 2 && tr.broadcast >= 1 && 'overRate' in tr && 'queueFull' in tr && 'testLost' in tr,

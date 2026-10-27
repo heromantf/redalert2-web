@@ -55,10 +55,20 @@ export async function onlineData(files) {
 
 const WHY = { name: '这个名字已经有人在用了，换一个', client: '这个浏览器已经有一个页面在联机', version: '游戏版本和服务器上其他玩家的不同',
               full: '服务器满了', bad: '名字或服务器地址不对' };
+// the latency: in a LAN game the game's own count (IPX's response time, 16 ms ticks) and Protocol Zero's
+// level, else the round trip to the relay (host/core/net.mjs)
+export function latencyText(s) {
+  if (!s || s.state !== 'joined') return '';
+  if (s.game) return `对局延迟 ${s.game.rsp ? `约 ${s.game.rsp * 16} ms` : '< 16 ms'}${s.game.level ? `（等级 ${s.game.level}）` : ''}`;
+  return s.rtt !== undefined ? `延迟 ${s.rtt < 1 ? '< 1' : s.rtt} ms` : '';   // a relay on this machine: under a millisecond
+}
 export function netText(s) {
   if (!s) return '';
   if (s.state === 'connecting') return '联机：连接中…';
-  if (s.state === 'joined') return `联机：${s.ip ?? ''}${s.peers ? ` · ${s.peers.length} 人在线（${s.peers.map((p) => p.name).join('、')}）` : ''}`;
+  if (s.state === 'joined') {
+    const latency = latencyText(s);
+    return `联机：${s.ip ?? ''}${s.peers ? ` · ${s.peers.length} 人在线（${s.peers.map((p) => p.name).join('、')}）` : ''}${latency ? ` · ${latency}` : ''}`;
+  }
   if (s.state === 'dropped') return `联机：断线了，${s.retryMs / 1000} 秒后重连`;
   if (s.state === 'refused') return `联机被拒：${WHY[s.why] ?? s.why}`;
   if (s.state === 'busy') return `联机：${WHY.client}，这个页面不联机`;

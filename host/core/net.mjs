@@ -21,18 +21,23 @@
 // runNet({ memory, ptr, url, hello, status, log }) joins the LAN and keeps it
 // joined: on a drop it reconnects with the relay's token (the same address,
 // so the game, which only sees datagrams, goes on). hello: { build, name,
-// client, lan }. status({ state, ip, peers, why }) as it changes: state
+// client, lan }. status({ state, ip, peers, why, rtt, game }) as it changes: state
 // 'connecting', 'joined', 'dropped' (and reconnecting) or 'refused' (and
-// stopped: why 'name', 'client', 'version', 'full' or 'bad').
+// stopped: why 'name', 'client', 'version', 'full' or 'bad'); and every 2 s
+// while joined, with tick set: rtt, the round trip to the relay in ms (a ping
+// it answers; the median of the last five), and in a LAN game game: { rsp, level },
+// IPX's response time in 16 ms ticks and Protocol Zero's level, as the game
+// counts them (the mailbox's game_* words, wasi/protocol_zero.c).
 const H = { magic: 0, version: 1, txSlots: 2, rxBytes: 3, slotBytes: 4, link: 5, ip: 6, txHead: 7, txTail: 8,
             rxHead: 9, rxTail: 10, txBell: 11, txLost: 12, rxLost: 13,
-            rxLostOwn: 14, sockLost: 15, sockLostOwn: 16, rxPeak: 17, sockPeak: 18, rxOpen: 19, rxClosed: 20 };   // wasi/net.c's net_hdr_t
-const MAGIC = 0x31544e52, VERSION = 2, HDR_BYTES = 256, SLOT_HDR = 12, MAX_DATA = 1472, WRAP = 0xffff;
+            rxLostOwn: 14, sockLost: 15, sockLostOwn: 16, rxPeak: 17, sockPeak: 18, rxOpen: 19, rxClosed: 20,
+            gameCount: 21, gameRsp: 22, gameLevel: 23 };   // wasi/net.c's net_hdr_t
+const MAGIC = 0x31544e52, VERSION = 3, HDR_BYTES = 256, SLOT_HDR = 12, MAX_DATA = 1472, WRAP = 0xffff;
 
 export const ipText = (ip) => [ip >>> 24, (ip >>> 16) & 255, (ip >>> 8) & 255, ip & 255].join('.');
 const ipNumber = (s) => s.split('.').reduce((a, b) => a * 256 + +b, 0) >>> 0;
 
-export function runNet({ memory, ptr, url, hello, status = () => {}, log = () => {} }) {
+export function runNet({ memory, ptr, url, hello, status: report = () => {}, log = () => {} }) {
   let hdr, bytes;
   const view = () => { if (!hdr || hdr.buffer !== memory.buffer) { hdr = new Int32Array(memory.buffer, ptr, HDR_BYTES / 4); bytes = new Uint8Array(memory.buffer); } };
   view();
@@ -42,6 +47,15 @@ export function runNet({ memory, ptr, url, hello, status = () => {}, log = () =>
   const txBase = ptr + HDR_BYTES, rxBase = txBase + txSlots * slotBytes;
 
   let ws = null, joined = false, token = '', stopped = false, retry = 0, sent = 0, received = 0;
+  // the status as a whole: each report the same fields, the latest of each
+  const cur = { state: 'connecting' };
+  const status = (s, tick = false) => {
+    if (s.state && s.state !== 'joined') delete cur.rtt, delete cur.game, rtts.length = 0;
+    Object.assign(cur, s);
+    report(tick ? { ...cur, tick: true } : { ...cur });
+  };
+  const rtts = [], pings = new Map();
+  let pingNo = 0, gameCount = null;
   const setLink = (up) => { view(); Atomics.store(hdr, H.link, up ? 1 : 0); };
 
   function connect() {
@@ -72,6 +86,10 @@ export function runNet({ memory, ptr, url, hello, status = () => {}, log = () =>
       log(`[net] joined LAN ${m.lan} as ${m.ip}: ${m.peers.map((p) => `${p.name} ${p.ip}`).join(', ')}`);
       status({ state: 'joined', ip: m.ip, peers: m.peers });
     } else if (m.t === 'peers') status({ state: 'joined', peers: m.peers });
+    else if (m.t === 'pong' && pings.has(m.n)) {
+      rtts.push(performance.now() - pings.get(m.n)); pings.delete(m.n);
+      if (rtts.length > 5) rtts.shift();
+    }
     else if (m.t === 'refused') {
       stopped = true;
       log(`[net] the relay refused: ${m.why}`);
@@ -118,6 +136,20 @@ export function runNet({ memory, ptr, url, hello, status = () => {}, log = () =>
       if (r.async) await r.value;
     }
   }
+  // the latency, every 2 s: a ping to the relay, and the game's own count of its round trip
+  setInterval(() => {
+    if (!joined || ws?.readyState !== 1) return;
+    for (const [n, t] of pings) if (performance.now() - t > 10000) pings.delete(n);   // no answer: an old relay, or lost
+    pings.set(++pingNo, performance.now());
+    ws.send(JSON.stringify({ t: 'ping', n: pingNo }));
+    view();
+    const count = Atomics.load(hdr, H.gameCount);
+    const game = gameCount !== null && count !== gameCount
+      ? { rsp: Atomics.load(hdr, H.gameRsp) >>> 0, level: Atomics.load(hdr, H.gameLevel) >>> 0 } : null;
+    gameCount = count;
+    const rtt = rtts.length ? Math.round([...rtts].sort((x, y) => x - y)[rtts.length >> 1]) : undefined;
+    status({ rtt, game }, true);
+  }, 2000);
   setInterval(() => {
     view();
     const a = (k) => Atomics.load(hdr, H[k]);

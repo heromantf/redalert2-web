@@ -119,7 +119,7 @@ const onMsg = (m) => {
     net.on('error', onError('net worker'));
     workers.push(net);
   }
-  else if (m.t === 'net') { if (m.s.state !== 'joined' || m.s.ip) process.stderr.write(`[net] ${JSON.stringify(m.s)}\n`); }
+  else if (m.t === 'net') { if (!m.s.tick && (m.s.state !== 'joined' || m.s.ip)) process.stderr.write(`[net] ${JSON.stringify(m.s)}\n`); }
   else if (m.t === 'log') (m.fd === 1 ? process.stdout : process.stderr).write(m.s + '\n');
   else if (m.t === 'note') process.stderr.write(m.s + '\n');
   else if (m.t === 'trap') process.stderr.write(`[host] TRAP in thread ${m.tid}: ${m.msg}\n${m.stack ?? ''}\n`);

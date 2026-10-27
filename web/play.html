@@ -125,7 +125,7 @@ import { cacheBusy, deleteCache } from './data-cache.js';
 import { manifestFiles, movieFiles } from './game-files.js';
 import { gameScreen } from './fullscreen.js';
 import { loadSettings, startMenu } from './settings.js';
-import { NAME_RE, claimOnline, netText, onlineData, onlineSettings, saveOnline, startNet } from './online.js';
+import { NAME_RE, claimOnline, latencyText, netText, onlineData, onlineSettings, saveOnline, startNet } from './online.js';
 
 const q = new URLSearchParams(location.search);
 const extra = q.getAll('arg');
@@ -164,7 +164,7 @@ async function goOnline() {
 }
 const settings = (ra2web.settings = loadSettings());
 const menu = (ra2web.menu = startMenu({ settings, screen, log, presenter: () => ra2web.presenter, audio: () => ra2web.audio,
-  memory: () => ra2web.memory, ctl: () => proc?.ctl }));
+  memory: () => ra2web.memory, ctl: () => proc?.ctl, latency: () => latencyText(netStatus) }));
 // the page's own keys, before the game's (input.js): true, and the game never sees it
 let rightAlt = false;
 function onKey(e, down) {
@@ -186,7 +186,7 @@ function onRegister(kind, ptr, size, memory, info) {
   regs[kind] = ptr;
   if (kind === 4 && onlineOn && !netWorker)               // the game's network mailbox: join the relay's LAN
     netWorker = startNet({ memory, ptr, url: online.relay, hello: { build: info.build, name: online.name, client: online.client },
-      onStatus: (s) => { netStatus = s; if (s.state !== 'joined' || s.ip) log(`[net] ${netText(s)}`); }, log });
+      onStatus: (s) => { netStatus = s; if (!s.tick && (s.state !== 'joined' || s.ip)) log(`[net] ${netText(s)}`); }, log });
   ra2web.memory = memory;
   if (kind === 1) ra2web.presenter = startPresenter(canvas, memory, ptr, { scale: settings.scale, param: settings.params[settings.scale] });
   const opts = { onKey, sensitivity: () => settings.sensitivity / 100 };

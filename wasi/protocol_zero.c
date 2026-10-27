@@ -44,6 +44,7 @@
 void ra2_log(int always, const char *fmt, ...) __attribute__((format(printf, 2, 3)));   /* main.c */
 int  ra2_log_on(void);
 void ra2web_net_counts(uint32_t *out, uint32_t *in);                                     /* net.c */
+void ra2web_net_game(int sample, uint32_t rsp_ticks, uint32_t level);
 
 /* The game's (gamemd.exe 1.001, the addresses YRpp has; each checked in IDA) */
 #define SESSION_MODE        0xA8B238u   /* SessionClass::GameMode: 0 campaign, 3 LAN, 4 internet, 5 skirmish */
@@ -95,6 +96,7 @@ static uint8_t g_level, g_max_level = LEVEL_MAX;
 static int32_t g_house_max_ahead[8], g_house_last_frame[8];
 static uint8_t g_house_level[8];
 static uint32_t g_message_va;          /* a buffer for the message's text, in guest memory */
+static int     g_shown_frame = -1;     /* the frame the page was last given IPX's response time (net_show) */
 
 void ra2_pz_option(int on) { g_option = on; }
 
@@ -229,6 +231,7 @@ void ra2_pz_game_start(void) {
     memset(g_house_level, 0, sizeof g_house_level);
     memset(g_house_last_frame, 0, sizeof g_house_last_frame);
     memset(&g_net, 0, sizeof g_net);
+    g_shown_frame = -1;
     ra2_pz_on = g_option;
     if (ra2_pz_on) {                               /* the spawner's, for Protocol=0 */
         uint32_t timing[4] = { 60, 0xFFFFFFFFu, 600, 1 };
@@ -248,9 +251,26 @@ void ra2_pz_game_start(void) {
     g_esp += 4;
 }
 
+/* The game's latency for the page (net.c's mailbox, the page's status bar and stats): in a LAN
+ * game, IPX's response time each 30 frames, and Protocol Zero's level; every round counted. */
+static void net_show(void) {
+    uint32_t mode = MEM32(SESSION_MODE);
+    if (mode != 3 && mode != 4) return;
+    int frame = (int)MEM32(CURRENT_FRAME), sample = 0;
+    uint32_t rsp = 0;
+    if (frame < g_shown_frame || frame >= g_shown_frame + SEND_INTERVAL) {
+        /* -1: a connection with none measured (0x542450 takes the largest, unsigned), as
+         * the send below (SendResponseTime2) skips it: tried again the next round */
+        int r = (int)guest_thiscall(IPX_RESPONSE_TIME, IPX_MANAGER, 0, NULL);
+        if (r >= 0) rsp = (uint32_t)r, g_shown_frame = frame, sample = 1;
+    }
+    ra2web_net_game(sample, rsp, ra2_pz_on ? g_level : 0);
+}
+
 /* The main loop, each round after the frame is drawn (0x55DDA0) */
 void ra2_pz_main_loop(void) {
     net_log();
+    net_show();
     if (ra2_pz_on && !single_player()) {           /* ProtocolZero::SendResponseTime2 */
         int frame = (int)MEM32(CURRENT_FRAME);
         if (g_next_send < 0) {

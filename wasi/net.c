@@ -100,7 +100,10 @@ typedef struct {
     uint32_t rx_peak, sock_peak;       /* 17, 18, ours: the most bytes found in the RX ring at once, and at a socket */
     uint32_t rx_open;                  /* 19, ours: sockets bound (0: the worker keeps nothing) */
     uint32_t rx_closed;                /* 20, the worker's: datagrams that came with no socket bound */
-    uint32_t pad[43];                  /* to 256 bytes */
+    uint32_t game_count;               /* 21, ours: a LAN game's main loop rounds (it changes: a game runs) */
+    uint32_t game_rsp;                 /* 22, ours: IPX's response time in the game, 16 ms ticks */
+    uint32_t game_level;               /* 23, ours: Protocol Zero's latency level (0: none yet, or off) */
+    uint32_t pad[40];                  /* to 256 bytes */
 } net_hdr_t;
 typedef struct {
     net_hdr_t h;
@@ -142,7 +145,7 @@ void ra2web_net_start(void) {
     if (g_mb || !getenv("RA2WEB_NET")) return;
     g_mb = (net_mailbox_t *)calloc(1, sizeof *g_mb);
     if (!g_mb) return;
-    g_mb->h.magic = NET_MAGIC, g_mb->h.version = 2;
+    g_mb->h.magic = NET_MAGIC, g_mb->h.version = 3;
     g_mb->h.tx_slots = NET_TX_SLOTS, g_mb->h.rx_bytes = NET_RX_BYTES, g_mb->h.slot_bytes = NET_SLOT_BYTES;
     ra2web_register(RA2WEB_NET, g_mb, (int)sizeof *g_mb);
     fprintf(stderr, "[net] the virtual LAN's mailbox: %u bytes\n", (unsigned)sizeof *g_mb);
@@ -176,6 +179,16 @@ static void deliver(uint32_t from, uint16_t sport, uint16_t dport, const uint8_t
         if (g_sock[i].used && g_sock[i].port == dport) queue_to(&g_sock[i], from, sport, data, len, bcast);
 }
 static uint32_t g_rx_count;               /* datagrams taken from the RX ring */
+/* A LAN game's round of the main loop, and its latency as the game measures it (protocol_zero.c):
+ * for the page to show (host/core/net.mjs, the status' game) */
+void ra2web_net_game(int sample, uint32_t rsp_ticks, uint32_t level) {
+    if (!g_mb) return;
+    if (sample) {
+        __atomic_store_n(&g_mb->h.game_rsp, rsp_ticks, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_mb->h.game_level, level, __ATOMIC_RELAXED);
+    }
+    __atomic_fetch_add(&g_mb->h.game_count, 1, __ATOMIC_RELEASE);
+}
 /* The datagrams the game has sent and been sent so far (protocol_zero.c's log of the network) */
 void ra2web_net_counts(uint32_t *out, uint32_t *in) {
     *out = g_mb ? __atomic_load_n(&g_mb->h.tx_head, __ATOMIC_RELAXED) : 0;
