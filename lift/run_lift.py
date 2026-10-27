@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -616,7 +617,10 @@ def online_patches(target):
 
 
 def apply_patches(body, patches):
-    """Add each patch's C after the line that lifts its instruction."""
+    """Add each patch's C after the line that lifts its instruction; '@replace:'
+    puts it in that line's place (an instruction lifted to one line), '@before:'
+    ahead of it, after its label: on every way into the address, a jump to it
+    too, as a hook at an address is (Syringe's, CnCNet's)."""
     for va, c in patches.items():
         tag = '/* 0x%08X:' % va
         k = body.find(tag)
@@ -625,6 +629,8 @@ def apply_patches(body, patches):
             e = body.index('\n', k)
             if c.startswith('@replace:'):
                 body = body[:start] + '    ' + c[len('@replace:'):] + '\n' + body[e + 1:]
+            elif c.startswith('@before:'):
+                body = body[:start] + '    ' + c[len('@before:'):] + '\n' + body[start:]
             else:
                 body = body[:e + 1] + '    ' + c + '\n' + body[e + 1:]
     return body
@@ -837,11 +843,18 @@ def main():
             lo = min(reached) if reached else addr   # a chunk can sit below the entry
             insns, leaders = (linear_disassemble_function(md, code, cs, lo, end, reached=reached)
                               if end > addr else ([], None))
+            mine = {va: c for va, c in patches.items() if reached and va in reached}
             if leaders is not None:
                 leaders.add(addr)
+                # A patch's goto needs its label: the address made a leader when no branch of the
+                # game's own lands there (Protocol Zero's, 0x647DF7). Only a label: the lifter's
+                # flag state runs on across it, so a patch jumps only where the flags are set
+                # before they are read.
+                leaders |= {t for c in mine.values() for t in map(lambda h: int(h, 16), re.findall(r'goto L_([0-9A-F]{8})', c))
+                            if t in reached}
             body = (lift_function_linear(lifter, name, insns, leaders, addr) if insns
                     else 'void %s(void) { }\n' % name)
-            body = apply_patches(body, {va: c for va, c in patches.items() if reached and va in reached})
+            body = apply_patches(body, mine)
         except Exception as e:                      # noqa: BLE001 -- counted, not hidden
             body = '/* ERROR %s: %s */\nvoid %s(void) { }\n' % (name, e, name)
             errors += 1
