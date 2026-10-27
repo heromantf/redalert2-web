@@ -1,0 +1,112 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>saves test: running</title>
+<!--
+  The saves' export and import (../saves.js), on an OPFS folder of its own
+  (ra2yr-test-saves, made afresh and removed at the end): what is a save and
+  what is not, a zip out and back, a zip made by another program (Python's
+  zipfile: a folder in it, macOS's entries, stored and deflated), a save of
+  the same name in another case replaced, not doubled, and a damaged zip
+  refused. The exported zip is printed ("[saves] zip i/n BASE64") for a
+  check by another program. node tools/chrome.mjs --page tests/saves (the
+  page sets its title to EXIT 0 or EXIT 1).
+-->
+<pre id="out"></pre>
+<script type="module">
+import { exportSaves, listSaves, readSaves, writeSaves } from '../saves.js';
+const SET = 'ra2yr-test-saves';
+const out = document.getElementById('out');
+let fails = 0;
+const say = (l) => { console.log(`[saves] ${l}`); out.textContent += l + '\n'; };
+const check = (ok, what) => { if (!ok) fails++; say(`${ok ? 'ok  ' : 'FAIL'} ${what}`); };
+const data = (seed, n) => Uint8Array.from({ length: n }, (_, i) => (i * 7 + seed * 13) % 251);   // as the zip below was made
+const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+const fromB64 = (s) => Uint8Array.from(atob(s.replace(/\s+/g, '')), (c) => c.charCodeAt(0));
+// Python's zipfile: ra2-saves/ (a folder), ra2-saves/SAVE0005.SAV (deflated, 300000 bytes), __MACOSX/ra2-saves/._SAVE0005.SAV,
+// ra2-saves/readme.txt, SAVE0006.SAV (stored, 1500 bytes), SAVE0002.SAV (deflated, 7000 bytes)
+const PYTHON_ZIP = `
+UEsDBBQAAAAAAAAAIQAAAAAAAAAAAAAAAAAKAAAAcmEyLXNhdmVzL1BLAwQUAAAACACjDFxdpeuM/soFAADgkwQAFgAAAHJhMi1zYXZlcy9TQVZFMDAwNS5T
+QVbtz1OWEAAAAMBs25ttuzbbtm1bm23btm3btm19dY/ezA0msEzlWg1btO/Wd8ioiTPmL1u7Zfehkxeu33v65vOvkBGixwtInSlngWJlq9Ru1LJD935DR0+a
+uWD5uq17Dp+6eOP+s7dffoeKGCN+0jSZcxUsXq5qncatOvboP2zM5FkLV6zftvfI6Us3Hzx/9/VP6EgxEyRLmyV3oRLlq9Vt0rpTzwFBY6fMXrRyw/Z9R89c
+vvXwxftvf8NEjpUwebqseQqXrFC9XtM2nXsNHD5u6pzFqzbu2H/s7JXbj15++B4sbJTYiVKkz5a3SKmKNeo3a9ul96AR46fNXbJ6084Dx89dvfP41ccfwcNF
+jZM4ZYbs+YqWrlSzQfN2XfsMHjlh+rylazbvOnji/LW7T15/+hkifLS4SVJlzJE/UF1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d
+XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d/f+r/wNQSwMEFAAAAAgAowxcXSEmhFcJAAAABwAAACEAAABfX01BQ09TWC9yYTItc2F2
+ZXMvLl9TQVZFMDAwNS5TQVZjYBVjz01MBgBQSwMEFAAAAAgAowxcXQ+ikj4MAAAACgAAABQAAAByYTItc2F2ZXMvcmVhZG1lLnR4dMvLL1FIVChOLEsFAFBL
+AwQUAAAAAACjDFxd8YgBKNwFAADcBQAADAAAAFNBVkUwMDA2LlNBVk5VXGNqcXh/ho2Um6KpsLe+xczT2uHo7/YCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOq
+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`;
+const root = await navigator.storage.getDirectory();
+try {
+  await root.removeEntry(SET, { recursive: true }).catch(() => {});
+  const dir = await root.getDirectoryHandle(SET, { create: true });
+  const put = async (d, name, bytes) => { const w = await (await d.getFileHandle(name, { create: true })).createWritable(); await w.write(bytes); await w.close(); };
+  await put(dir, 'SAVE0001.SAV', data(1, 2000000));
+  await put(dir, 'save0002.sav', data(2, 9000));
+  await put(dir, 'RA2MD.INI', new TextEncoder().encode('[Options]\n'));
+  await put(dir, 'SAVE00G1.SAV', data(3, 100));
+  await put(await dir.getDirectoryHandle('Saved', { create: true }), 'SAVE0003.SAV', data(3, 100));
+
+  const list = await listSaves(SET);
+  check(list.map((s) => s.name).join() === 'SAVE0001.SAV,save0002.sav', `the saves: ${list.map((s) => s.name).join(', ')} (not RA2MD.INI, SAVE00G1.SAV, Saved/SAVE0003.SAV)`);
+  const zip = await exportSaves(SET);
+  check(zip.size > 0 && zip.size < 100000, `exported: ${zip.size} bytes for ${list.reduce((n, s) => n + s.size, 0)}`);
+  const bytes = new Uint8Array(await zip.arrayBuffer()), b64 = btoa(String.fromCharCode(...bytes)), n = Math.ceil(b64.length / 8000);
+  for (let i = 0; i < n; i++) console.log(`[saves] zip ${i + 1}/${n} ${b64.slice(i * 8000, (i + 1) * 8000)}`);
+  const back = await readSaves(zip);
+  check(back.length === 2 && back[0].name === 'SAVE0001.SAV' && same(back[0].data, data(1, 2000000))
+        && back[1].name === 'SAVE0002.SAV' && same(back[1].data, data(2, 9000)), `read back: ${back.map((e) => `${e.name} ${e.data.length}`).join(', ')}`);
+
+  const py = await readSaves(new Blob([fromB64(PYTHON_ZIP)]));
+  check(py.map((e) => e.name).join() === 'SAVE0005.SAV,SAVE0006.SAV,SAVE0002.SAV', `Python's zip: ${py.map((e) => `${e.name} ${e.data.length}`).join(', ')}`);
+  check(same(py[0].data, data(5, 300000)) && same(py[1].data, data(6, 1500)) && same(py[2].data, data(22, 7000)), "Python's zip: the bytes");
+  await writeSaves(SET, py);
+  const after = await listSaves(SET);
+  check(after.map((s) => s.name).join() === 'SAVE0001.SAV,save0002.sav,SAVE0005.SAV,SAVE0006.SAV', `imported: ${after.map((s) => `${s.name} ${s.size}`).join(', ')}`);
+  const two = after.find((s) => s.name === 'save0002.sav');
+  check(two && same(new Uint8Array(await two.file.arrayBuffer()), data(22, 7000)), 'save0002.sav replaced by SAVE0002.SAV, not a second file beside it');
+
+  const bad = new Uint8Array(bytes); bad[200] ^= 0xFF;
+  const err = async (b) => { try { await readSaves(new Blob([b])); return 'read'; } catch (x) { return x.message; } };
+  const e1 = await err(bad), e2 = await err(new TextEncoder().encode('not a zip at all'));
+  check(/损坏/.test(e1), `a damaged zip: ${e1}`);
+  check(/不是 zip/.test(e2), `not a zip: ${e2}`);
+} catch (x) { check(false, `threw: ${x.stack ?? x}`); }
+await root.removeEntry(SET, { recursive: true }).catch(() => {});
+say(fails ? `${fails} failed` : 'all passed');
+document.title = `EXIT ${fails ? 1 : 0}`;
+</script>

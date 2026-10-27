@@ -313,3 +313,24 @@ uncapped, the scripted skirmish): 0.7 ms a frame at 640x480, 1.4 at
 1920x1080, 2.2-2.9 at 2560x1440, 3.4-4.4 at 3840x2160; in Chrome 60 game
 frames a second and 59-60 shown at 640x480, 1920x1080 and 3840x2160 (this
 Mac; slower machines not tried).
+
+**Saves out and back (2026-10-28).** A site's OPFS is its own (scheme, host
+and port) and the browser's: another address, browser or machine starts
+without the saves. The start panel's "存档" section (`web/saves.js`) exports
+them as one zip and imports one: the saves only, as the game names them
+(`SAVE%04lX.SAV`, its format at 0x829EE8) at the save set's top, not its
+INI or anything else it wrote; deflated by Chrome's `CompressionStream`, no
+library. An import takes a zip's saves at its top or in a folder of it (a
+folder zipped whole; macOS's `__MACOSX/` entries left out), checks each one's
+size and CRC, asks before it replaces saves of the same names, and writes over
+a save of the name in another case rather than beside it (win32hle's lookup
+ignores case). The panel is up only while the game is not running, which
+keeps its files open. Checked in Chrome: `web/tests/saves.html`
+(`tools/chrome.mjs --page tests/saves`) passes 9 checks: what is a save and
+what is not (an INI, `SAVE00G1.SAV`, a save in a folder), 2,009,000 bytes out
+in an 8,640-byte zip and back the same, a zip made by Python's `zipfile` (a
+folder, macOS's entries, stored and deflated) read, `save0002.sav` replaced
+by `SAVE0002.SAV` and no second file, a damaged zip and a file that is no zip
+refused; the exported zip read by Python's `zipfile` (`testzip` clean) and
+macOS's `unzip`. The panel's buttons on the play page: no saves, the export
+off; a zip imported, "这个浏览器里有 2 个存档", the export on and exporting both.

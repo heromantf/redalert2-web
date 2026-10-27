@@ -98,6 +98,11 @@
       <div class="hint" id="store"></div>
     </section>
     <section>
+      <div class="head"><b>存档</b></div>
+      <div class="row"><button id="savesout">导出存档</button><button id="savesin">导入存档</button><input type="file" id="savesfile" accept=".zip,application/zip" hidden><span class="hint" id="saveshint"></span></div>
+      <div class="hint">存档存在这个浏览器里，每个网址各自一份：换网址、换浏览器或换电脑前，先在这里导出成一个 zip，再到那边导入。只有存档，不含设置。</div>
+    </section>
+    <section>
       <div class="head"><b>联机</b></div>
       <div class="row"><label for="relay">服务器</label><input id="relay" class="text" placeholder="wss://服务器地址:端口/net（空着就不联机）" spellcheck="false"></div>
       <div class="row"><label for="pname">玩家名</label><input id="pname" class="text short" maxlength="16" spellcheck="false"><span class="hint" id="namehint"></span></div>
@@ -115,6 +120,7 @@ import { startPresenter } from './presenter.js';
 import { startInput } from './input.js';
 import { startAudio } from './audio.js';
 import { predownload } from './predownload.js';
+import { exportSaves, listSaves, readSaves, writeSaves } from './saves.js';
 import { cacheBusy, deleteCache } from './data-cache.js';
 import { manifestFiles, movieFiles } from './game-files.js';
 import { gameScreen } from './fullscreen.js';
@@ -282,6 +288,38 @@ $('del').onclick = async () => {
   storeLine();
 };
 $('full').onchange = () => localStorage.setItem('ra2web.full', $('full').checked ? '1' : '0');
+// the saves, out of this browser and back (saves.js), while the game is not running (the panel is up)
+const saveSet = q.get('save') ?? 'ra2yr';
+async function savesLine() {
+  try {
+    const s = await listSaves(saveSet);
+    $('saveshint').textContent = s.length ? `这个浏览器里有 ${s.length} 个存档` : '这个浏览器里还没有存档';
+    $('savesout').disabled = !s.length;
+  } catch (x) { $('saveshint').textContent = `读不到存档：${x.message}`; }
+}
+$('savesout').onclick = async () => {
+  const blob = await exportSaves(saveSet), a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `ra2-saves-${new Date().toISOString().slice(0, 10)}.zip`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  log(`[save] exported ${(await listSaves(saveSet)).length} saves, ${blob.size} bytes`);
+};
+$('savesin').onclick = () => $('savesfile').click();
+$('savesfile').onchange = async () => {
+  const f = $('savesfile').files[0];
+  $('savesfile').value = '';
+  if (!f) return;
+  try {
+    const got = await readSaves(f);
+    if (!got.length) { alert('这个 zip 里没有存档（SAVE 开头、.SAV 结尾的文件）'); return; }
+    const have = new Set((await listSaves(saveSet)).map((s) => s.name.toUpperCase())), same = got.filter((e) => have.has(e.name));
+    if (same.length && !confirm(`导入 ${got.length} 个存档，其中 ${same.length} 个会替换这里同名的存档（${same.map((e) => e.name).join('、')}）。继续？`)) return;
+    await writeSaves(saveSet, got);
+    log(`[save] imported ${got.length} saves (${same.length} replaced)`);
+  } catch (x) { alert(`导入失败：${x.message}`); }
+  savesLine();
+};
 // online play needs the game data here first (online.js onlineData): the hint under the relay's
 // address, and the play button holds until then (or until the address is cleared)
 let onlineReady = false, manifest = null, hintAt = 0, hintPhase = '';
@@ -321,6 +359,7 @@ function ended(code) {
   $('play').textContent = '重新开始';
   $('play').disabled = false;
   $('start').hidden = false;
+  savesLine();
   if (resume) download(); else pd.refresh({ movies: withMovies() }).then(storeLine);
 }
 
@@ -342,6 +381,7 @@ else {
   $('movies').checked = q.has('movies') || localStorage.getItem('ra2web.movies') === '1';
   $('full').checked = localStorage.getItem('ra2web.full') !== '0';
   $('relay').value = online.relay; $('pname').value = online.name;
+  savesLine();
   render(pd.state());
   try {
     moviesSize = movieFiles(await manifestFiles()).reduce((a, f) => a + f.size, 0);

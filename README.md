@@ -61,6 +61,7 @@ build the same module byte for byte, wherever the checkout is.
 .venv/bin/python tools/playtest.py --jobs 3    # every menu and game mode under Node (~30 min)
 node tools/chrome.mjs --page tests/cache       # the game data's OPFS cache
 node tools/chrome.mjs --page tests/store       # the saves' OPFS store
+node tools/chrome.mjs --page tests/saves       # the saves out to a zip and back
 node tools/chrome.mjs --page tests/predownload --query lossy \
   --server --throttle --server 3000,40 --server --drop --server 9   # the download ahead over a slow, lossy link
 tools/lan/pair.sh 300 chrome                   # two players through a relay, one in Chrome, in sync
