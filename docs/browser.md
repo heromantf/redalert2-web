@@ -335,11 +335,11 @@ refused; the exported zip read by Python's `zipfile` (`testzip` clean) and
 macOS's `unzip`. The panel's buttons on the play page: no saves, the export
 off; a zip imported, "这个浏览器里有 2 个存档", the export on and exporting both.
 
-**The game's own bugs that CnCNet fixes (2026-10-28).** Five, in the lift
+**The game's own bugs that CnCNet fixes (2026-10-28).** Six, in the lift
 (`lift/run_lift.py` `bugfix_patches`, one `wasi/fixes.c`), each where CnCNet
 found it (yrpp-spawner `src/Misc/Bugfixes.cpp`,
-`Bugfixes.ClampTacticalPos.cpp`, `Bugfixes.IsoMapPack5Limit.cpp`; yr-patches'
-type select: GPL-3.0, read, not copied), checked in IDA and written anew.
+`Bugfixes.ClampTacticalPos.cpp`, `Bugfixes.IsoMapPack5Limit.cpp`, `VideoMode.cpp`;
+yr-patches' type select: GPL-3.0, read, not copied), checked in IDA and written anew.
 None touches the game's state, so none can unsync a network game.
 - **A map smaller than the view.** The view's limits (0x6D8640: x from
   `view w / 2 + 30 (2 visible x - map w)` to that `+ 60 visible w - view w`,
@@ -386,7 +386,8 @@ None touches the game's state, so none can unsync a network game.
 - **Waiting for the other players** (dialog 0xEA, 0x648710). On Windows its
   first control, Leave Game (IDCANCEL), gets the focus as the dialog is shown
   (the dialog manager's first tab stop), and Space, meant for the game (it
-  jumps to the last event), presses it: the player has left. The focus is
+  centres the view on the last radar event: `CenterOnRadarEvent=32` in
+  KEYBOARDMD.INI), presses it: the player has left. The focus is
   taken off once it is shown (SetFocus(0) at 0x648CCC, as CnCNet's). Here the
   bug does not show: win32hle gives the dialog itself the focus as it is
   shown. Tried before the fix (a pair, Alice under Node stopped for 45 s
@@ -395,3 +396,14 @@ None touches the game's state, so none can unsync a network game.
   Bob waited its 30 s and removed Alice. After it the same: nothing on Space
   or Enter, Alice removed after 30 s, both on to the score screen. The patch
   stays, so that it cannot whatever win32hle's focus does.
+- **The shell's layout at 601 to 767 lines** (0x72EC70, the screen's width and
+  height): the 800x600 shell is centred across from 1024 wide and down from
+  768 high (0x72ECA4), so at 1280x720 it sits at the top and the 120 lines
+  under it are never drawn. Seen in a game's menus (Esc, Delete Game: the
+  message box asking Yes or No draws the shell behind it): what the surface
+  last held, noise, under the shell. Centred down from 600 high now (the jump
+  at 0x72ECB2 against 600; the spawner's `VideoMode.cpp` writes 600 into the
+  compare): 60 lines black above and below at 720. 800x600, 1366x768 and
+  every height under 601 or over 767 lay out as before (the same numbers).
+  Checked in Chrome at 1280x720, the allied campaign's first mission: the
+  noise before, the shell centred after.

@@ -16,7 +16,8 @@ copy of the game; nothing of it is in this repository.
   with the mouse and keys locked, and the Steam release's two wrappers' screen
   filters (Shift+F11). The game as shipped, none of the remaster's additions,
   with bugs that CnCNet fixes fixed too (`docs/browser.md`: a map smaller
-  than the screen, a big map's terrain, the loading screen's waits).
+  than the screen, a big map's terrain, the loading screen's waits, the
+  menus at 1280x720).
 - **Online**: pages play each other through a relay (`relay/`), the game's own
   LAN lobby, any number of rooms; the original's desyncs and the crashes
   CnCNet's players met are fixed in the lift, and the latency follows the

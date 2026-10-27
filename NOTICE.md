@@ -95,7 +95,7 @@ wrappers, each computed as its source computes it:
   bugs of the game as shipped that the spawner and yr-patches fix
   (`bugfix_patches`, `wasi/fixes.c`: a map smaller than the view, the
   IsoMapPack5 limit, Do_Blit's wait, the wait dialog's focus, type select's
-  redraw): their addresses and limits, written anew.
+  redraw, the shell's layout): their addresses and limits, written anew.
 - **YRpp**: the game's structures and addresses (facts about the game).
 - **IPXEmu** (Jelle Geerts): win32hle's IPX over UDP (`win32hle/wsock32.c`)
   puts the same bytes on the wire, checked against its 1.0.4 source; none of

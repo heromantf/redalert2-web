@@ -675,6 +675,14 @@ def bugfix_patches(target):
     #    pressed again and again, a full redraw each time. Not asked: the selection shows as the
     #    view is drawn anyway.
     p[0x00732CED] = '@before:goto L_00732CF9;' + tag
+    # 6. The shell's layout (0x72EC70, width and height): 800x600 centred, across from 1024 wide
+    #    and down from 768 high (0x72ECA4: cmp esi, 768). A screen 600 to 767 high, 1280x720 say,
+    #    gets the layout at the top, and the 120 lines under it are never drawn: the in-game menus
+    #    (Esc in a game: its save, load and delete) over whatever the surface held. Centred down
+    #    from 600 high, as CnCNet's (the spawner's VideoMode.cpp, 0x72ECA6). The compare is lifted
+    #    to more than a line: its jump against 600 instead, the flags read by nothing after it.
+    p[0x0072ECB2] = ('@replace:if ((int32_t)esi < 600) goto L_0072ECD6; /* 0x0072ECB2: jl 0x72ecd6, '
+                     'against 600, not 0x72ECA4\'s 768 */' + tag)
     return p
 
 
