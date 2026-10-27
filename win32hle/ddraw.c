@@ -270,6 +270,7 @@ static const int g_modes[][2] = { { 640, 480 }, { 800, 600 }, { 1024, 768 }, { 1
                                   { 2560, 1080 }, { 2560, 1440 }, { 2560, 1600 }, { 3440, 1440 }, { 3840, 1600 },
                                   { 3840, 2160 } };
 #define NMODES ((int)(sizeof g_modes / sizeof *g_modes))
+int (*hle_dd_modes_hook)(int (*out)[2]);
 int hle_dd_modes(int dw, int dh, int (*out)[2]) {      /* the table, with the display's size in its place */
     int n = 0;
     if (dw < 640 || dh < 480 || dw > 3840 || dh > 2160) dw = 0;
@@ -286,9 +287,9 @@ static void dd_EnumDisplayModes(void) {                  /* (this, flags, desc f
     uint32_t cb = A32(4), filter = A32(2), ctx = A32(3), mark = hle_scratch_mark();
     uint32_t dva = hle_scratch(27 * 4);
     uint32_t *d = (uint32_t *)hle_ptr(dva);
-    int modes[HLE_DD_MAX_MODES][2], dw = 0, dh = 0;
-    hle_screen_desktop(&dw, &dh);
-    int n = hle_dd_modes(dw, dh, modes);
+    int modes[HLE_DD_MAX_MODES][2], dw = 0, dh = 0, n;
+    if (hle_dd_modes_hook) n = hle_dd_modes_hook(modes);   /* the host's own list */
+    else hle_screen_desktop(&dw, &dh), n = hle_dd_modes(dw, dh, modes);
     for (int bpp = 8; bpp <= 32; bpp += 8) {
         if (bpp == 24) continue;
         for (int i = 0; i < n; i++) {
