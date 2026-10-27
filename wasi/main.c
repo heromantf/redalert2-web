@@ -12,12 +12,14 @@
  *
  * What is here: the command line, the game's own AllowHiResModes on, the
  * player's name and the virtual LAN (net.c) when the page joins one, the
- * game's debug log, its message boxes,
+ * game's debug log and this host's (ra2_log), Protocol Zero's switch
+ * (--protocol-zero, protocol_zero.c), its message boxes,
  * Blowfish's COM class (src/linux/blowfish.c), the scripted input the tests
  * drive (src/linux/script.c), the cursor the page shows, a frame checksum
  * every 3.33 s, the watchdog.
  */
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -52,6 +54,22 @@ int  script_arg(int argc, char **argv, int i);   /* script.c */
 int  script_active(void);
 void script_log_line(const char *line);
 void script_start(void);
+
+/* A line of this host's own log (protocol_zero.c's [pz], [net]): to a test's
+ * script, and with --debuglog (or always) to stderr. */
+void ra2_log(int always, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void ra2_log(int always, const char *fmt, ...) {
+    if (!always && !g_debuglog && !script_active()) return;
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    script_log_line(buf);
+    if (always || g_debuglog) fprintf(stderr, "%s\n", buf);
+}
+int ra2_log_on(void) { return g_debuglog || script_active(); }
+void ra2_pz_option(int on);           /* protocol_zero.c */
 
 /* The game's debug printf, compiled out of the retail build: --debuglog
  * prints it (its arguments read off the guest stack, a %s as a guest
@@ -344,8 +362,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--trace")) win32hle_trace = 1;
         else if (!strcmp(argv[i], "--exe") && i + 1 < argc) i++;   /* the folder's gamemd.exe is the one */
         else if (!strcmp(argv[i], "--dump-frames") && i + 1 < argc) g_dump_dir = argv[++i];   /* absolute: a preopened dir */
+        else if (!strcmp(argv[i], "--protocol-zero") && i + 1 < argc &&
+                 (!strcmp(argv[i + 1], "on") || !strcmp(argv[i + 1], "off")))
+            ra2_pz_option(!strcmp(argv[++i], "on"));   /* off: the game's own timing (protocol_zero.c) */
         else {
             printf("usage: ra2.wasm [--run] [--game DIR] [--debuglog] [--mute] [--watchdog S] [--trace] [--dump-frames DIR]\n"
+                   "           [--protocol-zero on|off]\n"
                    "           [--press DLG:CTRL@s] [--select DLG:CTRL=N@s] [--waitlog TEXT@s] [--move|--click x,y@s]\n"
                    "           [--key [c][s][a]+vk@s] [--wait VA@s] [--drag x1,y1,x2,y2@s]\n");
             return !strcmp(argv[i], "--help") || !strcmp(argv[i], "-h") ? 0 : 1;

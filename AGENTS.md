@@ -54,6 +54,7 @@ result, in `spike/`; what came from where in `NOTICE.md`.
 | the page (`web/`: presenter, input, full screen, settings) | a scripted run in Chrome (`node tools/chrome.mjs --page play ...`), `tests/cache`, `tests/store` |
 | the game data (`data-cache.js`, `http-backend.js`, `block-fetch.js`, the download ahead) | `tests/cache`, `tests/predownload` (lossy, README), `tools/predownload-loop.sh 8` |
 | online (`wasi/net.c`, `host/core/net.mjs`, `web/online.js`, `relay/`) | `node relay/test.mjs` against a running relay, `tools/lan/pair.sh 300 chrome`, `tools/lan/two-rooms.sh 8` |
+| the game's network timing (`protocol_zero_patches`, `wasi/protocol_zero.c`) | the same, `tools/lan/room.sh 8 420`, `tools/lan/two-games.sh`, `spike/protocol-zero/run.sh` against its RESULT.md |
 | `tools/env.sh`, `tools/deps.sh`, `wasi/build.sh` | the same, and a copy of the committed files elsewhere built from nothing (`deps.sh`, `lift.sh`, `build.sh`): the module must come out the same bytes |
 
 A test that opens a Chrome window stays headless unless asked: `tools/chrome.mjs`

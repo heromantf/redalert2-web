@@ -17,8 +17,11 @@ copy of the game; nothing of it is in this repository.
   shipped: none of the remaster's additions.
 - **Online**: pages play each other through a relay (`relay/`), the game's own
   LAN lobby, any number of rooms; the original's desyncs and the crashes
-  CnCNet's players met are fixed in the lift. Checked on one Mac, under Node
-  and in Chrome; not yet between real machines or over the internet.
+  CnCNet's players met are fixed in the lift, and the latency follows the
+  network as with CnCNet (its Protocol Zero: a click takes effect after ~90 ms
+  on a near relay, the game's own ~375 ms at any distance). Checked on one
+  Mac, under Node and in Chrome, with a relay delaying and losing datagrams;
+  not yet between real machines or over the internet.
 - **Headless** under Node too: the test suite (`tools/playtest.py`, every menu
   and game mode, 37 cases) runs there.
 - Not yet: serving the page to others (it needs HTTPS), Windows as a build
@@ -62,6 +65,8 @@ node tools/chrome.mjs --page tests/predownload --query lossy \
   --server --throttle --server 3000,40 --server --drop --server 9   # the download ahead over a slow, lossy link
 tools/lan/pair.sh 300 chrome                   # two players through a relay, one in Chrome, in sync
 tools/lan/two-rooms.sh 8                       # two rooms at once, with a crowded lobby
+tools/lan/room.sh 8 420                        # a game of eight (~6 GB, 8 cores)
+spike/protocol-zero/run.sh                     # Protocol Zero against the game's timing, 0-200 ms (~55 min)
 tools/perf-skirmish.sh wasm 150                # a scripted skirmish's frame times
 ```
 

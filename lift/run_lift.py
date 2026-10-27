@@ -616,6 +616,74 @@ def online_patches(target):
     }
 
 
+# Protocol Zero, CnCNet's latency control for online play (refs/yrpp-spawner
+# src/Spawner/ProtocolZero*.cpp, src/Ext/Event/Body.cpp: GPL-3.0, read for what
+# it found, the places, conditions and constants; written anew here, its logic
+# in wasi/protocol_zero.c). The game as shipped sets a network game's timing at
+# its start from IPX's response time (0x5DC350: FrameSendRate 5, MaxAhead 10
+# or more) and then by the TIMING events of the first live human. With this,
+# each player sends its response time every 30 frames in an event of a type the
+# game lacks (0x30, two bytes), every machine takes the worst of the last 120
+# frames' as it executes them (in step: the same frame on each), and raises a
+# latency level (never lowering it in a game) that the first live human sends
+# as a precalculated TIMING: MaxAhead from the level's table, FrameSendRate the
+# level, 60 fps. Each site below was checked in IDA (docs/online.md). The
+# type's size and its answer are not behind the switch (nor are they in the
+# spawner): a machine with it off still reads such an event.
+def protocol_zero_patches(target):
+    if target != 'gamemd':
+        return {}
+    tag = ' /* Protocol Zero: run_lift.py protocol_zero_patches */'
+    on = 'extern int ra2_pz_on; '
+
+    def call(fn):          # a host function run as a lifted one: the registers out to it and back
+        return '{ extern void %s(void); RECOMP_CALL(%s); }' % (fn, fn)
+
+    p = {}
+    # A LAN game's start: 0x5DC350's end with a game to load, where its two ways (0x5DD340,
+    # 0x5DD374, 0x5DD872) meet: the spawner's start values over those the game has just set,
+    # the last game's level gone.
+    p[0x005DD877] = '@before:' + call('ra2_pz_game_start') + tag
+    # The main loop, the frame drawn (0x55DD9B): the response time sent when due.
+    p[0x0055DDA0] = '@before:' + call('ra2_pz_main_loop') + tag
+    # QueueAI_Multiplayer (0x6475F0). A real TIMING without 5 frames sent first (AFA400):
+    p[0x00647BEB] = '@before:{ ' + on + 'if (ra2_pz_on) goto L_00647BF4; }' + tag
+    # The response time it reads (IPXManagerClass vtable +0x30, 0x542450): the worst MaxAhead
+    # sent, for IPX's timing each 128 frames (0x6476CB) and a real TIMING's MaxAhead (0x647CC5).
+    for va, past in ((0x006476CB, 0x006476D0), (0x00647CC5, 0x00647CCA)):
+        p[va] = ('@before:{ %sextern int ra2_pz_worst_max_ahead; if (ra2_pz_on) { eax = (uint32_t)ra2_pz_worst_max_ahead; '
+                 'goto L_%08X; } }' % (on, past) + tag)
+    # A real TIMING's MaxAhead: the one now, not the one computed (+10 with flag 0x1000).
+    p[0x00647DF2] = '@before:{ ' + on + 'if (ra2_pz_on) { edx = MEM32(0xA8B550u) & 0xFFFFu; goto L_00647DF7; } }' + tag
+    # A precalculated TIMING's FrameSendRate: the level's, not 10 or 5 by its frame rate.
+    p[0x00647EB4] = ('@before:{ ' + on + 'extern uint8_t ra2_pz_new_frame_send_rate; if (ra2_pz_on) { '
+                     'SET_LO8(eax, ra2_pz_new_frame_send_rate); ecx = MEM32(0xA8ED84u); goto L_00647EBE; } }' + tag)
+    for va in (0x0064771D, 0x00647E6B):                         # IPX's timing set (0x540C60): logged
+        p[va] = '@before:{ ' + on + 'if (ra2_pz_on) ' + call('ra2_pz_log_timing') + ' }' + tag
+    # EventClass::Execute (0x4C6CB0). TIMING: its MaxAhead as sent, without the -10 for flag 0x1000.
+    p[0x004C8011] = '@before:{ ' + on + 'if (ra2_pz_on) goto L_004C8024; }' + tag
+    # Each event as it executes: 0x30 answered (the switch after it has no such case); 0x21,
+    # PROCESS_TIME, made each 128 frames by every player, for the log of the input delay.
+    p[0x004C6CC8] = '@before:if (MEM8(esi) == 0x30u || MEM8(esi) == 0x21u) ' + call('ra2_pz_respond') + tag
+    # Execute_DoList (0x64C380): an event later than its frame, otherwise dropped (0x64C5AF):
+    # EMPTY, PROCESS_TIME and 0x30 executed all the same.
+    p[0x0064C598] = ('@before:{ ' + on + 'if (ra2_pz_on && (LO8(edx) == 0x00u || LO8(edx) == 0x21u || LO8(edx) == 0x30u)) { '
+                     + call('ra2_pz_late') + ' goto L_0064C63D; } }' + tag)
+    # Its name in the debug log (the table, 0x82091C, stops at 0x2F: 0x30's entry is no pointer).
+    p[0x0064C5C7] = ('@before:{ extern uint32_t ra2_pz_name_va; if (LO8(eax) == 0x30u && ra2_pz_name_va) { '
+                     'ecx = ra2_pz_name_va; goto L_0064C5CE; } }' + tag)
+    # Its size, packing (0x64B660) and unpacking (0x64BDD0) a packet's events: 2 bytes. The
+    # size table (0x8208EC) stops at 0x2F; 0x30's entry would be 0xE8, the next table's.
+    p[0x0064B6FE] = '@before:if (LO8(edi) == 0x30u) { edx = 2u; ebp = 2u; goto L_0064B71D; }' + tag
+    p[0x0064BE7D] = '@before:if (LO8(edi) == 0x30u) { MEM32(esp + 0x20u) = 2u; ecx = 2u; ebp = 2u; goto L_0064BE97; }' + tag
+    p[0x0064C30E] = '@before:if (LO8(esi) == 0x30u) { ecx = 2u; ebp = 2u; goto L_0064C321; }' + tag
+    # The log of the network's timing, either protocol: the time QueueAI_Multiplayer waits for
+    # the other players in a game (Wait_For_Players, 0x648710, called at 0x648067).
+    p[0x00648067] = '@before:' + call('ra2_net_wait_begin') + tag
+    p[0x0064806C] = '@before:' + call('ra2_net_wait_end') + tag
+    return p
+
+
 def apply_patches(body, patches):
     """Add each patch's C after the line that lifts its instruction; '@replace:'
     puts it in that line's place (an instruction lifted to one line), '@before:'
@@ -656,7 +724,8 @@ def targets():
                        title="Yuri's Revenge", game_frame=0x00A8ED84, stamp=0x3BDF544E,
                        patches=lambda code, cs: {**sidebar_rows_patches(code, cs), **HD_VOXEL_PATCHES,
                                                  **modern_controls_patches('gamemd'), **queue_five_patches('gamemd'),
-                                                 **clip_line_patches('gamemd'), **desync_fix_patches('gamemd'), **online_patches('gamemd'), **crash_fix_patches('gamemd')}),
+                                                 **clip_line_patches('gamemd'), **desync_fix_patches('gamemd'), **online_patches('gamemd'), **crash_fix_patches('gamemd'),
+                                                 **protocol_zero_patches('gamemd')}),
         'game': dict(exe=os.path.join(_GAME, 'game.exe'),
                      catalog=os.path.join(_LIFT, 'game', 'functions.json'),
                      seeds=os.path.join(_LIFT, 'game', 'rtti_seeds.json'),

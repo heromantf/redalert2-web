@@ -175,6 +175,12 @@ static void deliver(uint32_t from, uint16_t sport, uint16_t dport, const uint8_t
     for (int i = 0; i < NET_SOCKETS; i++)
         if (g_sock[i].used && g_sock[i].port == dport) queue_to(&g_sock[i], from, sport, data, len, bcast);
 }
+static uint32_t g_rx_count;               /* datagrams taken from the RX ring */
+/* The datagrams the game has sent and been sent so far (protocol_zero.c's log of the network) */
+void ra2web_net_counts(uint32_t *out, uint32_t *in) {
+    *out = g_mb ? __atomic_load_n(&g_mb->h.tx_head, __ATOMIC_RELAXED) : 0;
+    *in = __atomic_load_n(&g_rx_count, __ATOMIC_RELAXED);
+}
 /* what the worker put in the RX ring, into the sockets' queues */
 static void pump(void) {
     if (!g_mb) return;
@@ -189,6 +195,7 @@ static void pump(void) {
         if (len == NET_RX_WRAP) { tail += NET_RX_BYTES - at; continue; }
         memcpy(&flags, r + 2, 2), memcpy(&from, r + 4, 4), memcpy(&sport, r + 8, 2), memcpy(&dport, r + 10, 2);
         if (len <= NET_MAX_DATA) deliver(from, sport, dport, r + NET_SLOT_HDR, len, flags & 1);
+        __atomic_fetch_add(&g_rx_count, 1, __ATOMIC_RELAXED);
         tail += (NET_SLOT_HDR + len + 3u) & ~3u;
     }
     __atomic_store_n(&g_mb->h.rx_tail, tail, __ATOMIC_RELEASE);

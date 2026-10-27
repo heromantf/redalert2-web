@@ -88,7 +88,10 @@ wrappers, each computed as its source computes it:
   `lift/run_lift.py` (`desync_fix_patches`, `crash_fix_patches`,
   `online_patches`) do what CnCNet's yrpp-spawner and yr-patches found, at
   the addresses they found it (both GPL-3.0): written anew here, each checked
-  against the game's code, none of their code used.
+  against the game's code, none of their code used. So does Protocol Zero,
+  the spawner's latency control (`protocol_zero_patches`,
+  `wasi/protocol_zero.c`): its sites, conditions and constants, and the ten
+  names of its latency levels in its message, the logic written anew.
 - **YRpp**: the game's structures and addresses (facts about the game).
 - **IPXEmu** (Jelle Geerts): win32hle's IPX over UDP (`win32hle/wsock32.c`)
   puts the same bytes on the wire, checked against its 1.0.4 source; none of

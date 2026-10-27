@@ -1,7 +1,8 @@
 # Online play
 
 The game's LAN through a relay: its sockets, the page's worker, the relay,
-the original's desyncs and crashes fixed, the lobby and its queues. Moved here from README.md as it was written at the time;
+the original's desyncs and crashes fixed, the lobby and its queues, the
+latency control (Protocol Zero). Moved here from README.md as it was written at the time;
 the experiments behind it are in `spike/`.
 
 ## Online play: the game's LAN through a relay (2026-10-26)
@@ -116,8 +117,77 @@ Nothing of the game changes for it but its sockets and the fixes below.
   The sync check catches a desync: Bob's scenario random table scrambled in
   the battle (`POKE=1`), both stopped at frame 2310 with the game's
   out-of-sync dialog (0xCE), and Bob wrote SYNC1.TXT. The relay's protocol:
-  `relay/test.mjs`, 15 checks.
+  `relay/test.mjs`, 17 checks (18 with `-test-delay`).
 - **Not done**: serving the page and its data to friends (HTTPS; the relay
   is separate), a real network's latency and loss (WebSocket is TCP: a lost
-  segment holds up what follows; WebTransport datagrams are the way to UDP),
-  CnCNet's Protocol Zero (latency-adaptive send rate), two real machines.
+  segment holds up what follows; WebTransport datagrams are the way to UDP;
+  the relay's test options stand in for a path's delay, jitter and loss),
+  two real machines.
+
+## Protocol Zero: the latency control CnCNet plays with (2026-10-27)
+
+The game as shipped sets a network game's timing at its start from IPX's
+response time (0x5DC350: FrameSendRate 5, MaxAhead at least 10) and then by
+the TIMING events of the first live human: 15 frames and FrameSendRate 5 at
+every round trip measured, ~375 ms from a click to its effect on a LAN as
+across 200 ms. CnCNet's yrpp-spawner (`src/Spawner/ProtocolZero*.cpp`,
+`src/Ext/Event/Body.cpp`, GPL-3.0: read for its findings) replaces it with
+Protocol Zero, which its players have long played with; here it is written
+anew, the same logic, on in every LAN game (`--protocol-zero off`: the game's
+own, for measuring).
+
+- **What it does** (`wasi/protocol_zero.c`): each player sends its response
+  time every 30 frames (the first 240 frames after the game's start) in an
+  event of a type the game lacks, 0x30, two bytes: the response time + 1 as a
+  MaxAhead, and its latency level (the first of 1-8 whose MaxAhead, 4 6 12 16
+  20 24 28 32, the response time does not pass, else 9; the response time is
+  IPX's, 0x542450: the worst of its connections' mean ack time, in
+  `timeGetTime() >> 4`, 16 ms). Every machine executes those events in step
+  (the same frame on each), keeps each house's last and drops those 120
+  frames old, and raises its level to the highest (never lowering it in a
+  game): FrameSendRate the level, MaxAhead its table's (36 at 9), 60 fps, as
+  the precalculated timing that the first live human sends as a TIMING at
+  its next QueueAI; everyone takes it on that event's frame. The real TIMING
+  each 256 frames then sets the frame rate from the slowest machine's, with
+  MaxAhead and FrameSendRate kept. A raise prints "Latency mode set to: N -
+  Best..." (CnCNet's message without its "CnCNet: ").
+- **The start**: at 0x5DD877, the end of 0x5DC350 where its two ways meet
+  with a game to load, the spawner's values for Protocol=0 over the game's:
+  FrameSendRate 2, MaxAhead 12, 60 fps, PreCalc 0, MaxMaxAhead 0,
+  LatencyFudge 0, IPX's timing (60, -1, 600 ticks); and Protocol Zero's state
+  from its beginning (level 0, the worst MaxAhead 24): the spawner runs one
+  game in a process, a page one game after another. Every LAN game goes
+  through there (0x52D9A0's LAN way: 0x5DC350 returns with a game to load,
+  and a game's end comes back to it); QueueAI_Multiplayer, which holds most of
+  the sites, runs only in network games (0x6475C8, modes 1-4).
+- **The sites** (`lift/run_lift.py` `protocol_zero_patches`, each checked in
+  IDA; `@before:` a patch ahead of its instruction, after its label, so on
+  every way in, as a hook at an address is): the main loop after drawing
+  (0x55DDA0: the send); QueueAI_Multiplayer's real TIMING without 5 frames
+  sent first (0x647BEB), the response time it reads the worst MaxAhead
+  (0x6476CB, 0x647CC5), the TIMING's MaxAhead the one in force (0x647DF2),
+  the precalculated TIMING's FrameSendRate the level's (0x647EB4); TIMING
+  executed without its -10 for flag 0x1000 (0x4C8011); the event executed
+  (0x4C6CC8); EMPTY, PROCESS_TIME and 0x30 executed when late, not dropped
+  (0x64C598); the event's size, 2, packing and unpacking (0x64B6FE,
+  0x64BE7D, 0x64C30E: the size table, 0x8208EC, stops at 0x2F, and 0x30's
+  entry, 0xE8, would throw the packet's parse) and its name in the debug log
+  (0x64C5C7: 0x30's entry is no pointer). Its size and its answer are not
+  behind the switch (nor in the spawner): a machine with it off still reads
+  such an event. Two of the patches' jumps land where the game's code has no
+  branch (0x647DF7, 0x64C5CE): `run_lift.py` makes those addresses labels; the
+  lift is otherwise the same line for line, 91 patch lines and 8 labels added.
+- **Measured** (`spike/protocol-zero/RESULT.md`: two players under Node, the
+  relay's `-test-delay` for the round trip, at the LAN's saved game speed, 45
+  fps): the input delay, the game's own 17 frames (~375 ms) at a round trip
+  of 0 to 200 ms, Protocol Zero's 4 frames (89 ms) at 0 and 50 ms, 13 (290 ms)
+  at 100 ms, 16 (355 ms) at 200 ms; in sync throughout, with 1 % lost and
+  ±10 ms of jitter too; the waits over 50 ms no more frequent; five times the
+  datagrams at level 1 (47 a second a page with two players). Eight players
+  (`tools/lan/room.sh 8 420`): 4 frames against 18-19, 329 datagrams a second
+  a page (66 the game's own), the relay's limit (1000) never reached, all
+  eight in sync. Commands across the first switch (often a lower MaxAhead, 12
+  to 4): none late, in sync (4 games, nine or more SCATTER events every 0.25 s
+  from 3 s to 10 s). Two games in one page (`tools/lan/two-games.sh`: Bob
+  leaves the first, Alice wins, Continue, the Network lobby, Carol joins her
+  second): each starts from the same values and raises again.

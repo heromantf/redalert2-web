@@ -13,6 +13,7 @@
 #                         without it wasi/bink.c instead of bink.c (black movies)
 #   wasi/                 the host (main.c: the game as shipped, none of the remaster's features),
 #                         what WASI lacks (compat.c, sdl.c), the display (screen.c), the LAN (net.c),
+#                         its latency control (protocol_zero.c: CnCNet's Protocol Zero, run_lift.py's patches),
 #                         and of redalert2-recomp's native host script.c (the tests' scripted input)
 #                         and blowfish.c (the game's cipher, a COM class)
 # Every runtime and host file is compiled with wasi/compat/compat.h forced in and
@@ -84,6 +85,7 @@ T0=$(date +%s)
   done
   echo "$WEB/wasi/main.c $OUTO/wasi_main.o HOSTFLAGS"
   echo "$WEB/wasi/net.c $OUTO/wasi_net.o HOSTFLAGS"
+  echo "$WEB/wasi/protocol_zero.c $OUTO/wasi_protocol_zero.o HOSTFLAGS"
   echo "$WEB/wasi/screen.c $OUTO/wasi_screen.o HOSTFLAGS"
   echo "$WEB/wasi/sdl.c $OUTO/wasi_sdl.o HOSTFLAGS"
   [ $FFMPEG = 1 ] || echo "$WEB/wasi/bink.c $OUTO/wasi_bink.o HOSTFLAGS"
