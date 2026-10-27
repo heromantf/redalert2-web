@@ -1,0 +1,133 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>predownload test: running</title>
+<!--
+  The download ahead (predownload.js, predownload-worker.js) on a few files of
+  the game data (about 35 MB: an archive that compresses, the taunts, maps),
+  meant for a slow, lossy server:
+    node tools/chrome.mjs --page tests/predownload --query lossy \
+      --server --throttle --server 3000,40 --server --drop --server 9
+  Checks: progress that only grows; stopped part way, what it kept in the
+  index, started again, nothing kept twice, done; every block the server's
+  (read past the cache's code); fewer bytes on the network than of data
+  (compression); with ?lossy, the cut answers made again; another holder of
+  the cache: busy; a full disk: an error, told, what came before it kept.
+  ?full instead: the whole download (no movies) into an emptied cache, timed.
+  The title: EXIT 0 or EXIT 1. On a port of its own: it empties the cache.
+-->
+<pre id="out"></pre>
+<script type="module">
+import { predownload } from '../predownload.js';
+import { BLOCK, CACHE_DIR, deleteCache, keyOf, openDataCache, scanKept } from '../data-cache.js';
+import { aheadFiles, manifestFiles } from '../game-files.js';
+
+const out = document.getElementById('out');
+const log = (s) => { console.log(s); out.textContent += s + '\n'; };
+const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+const q = new URLSearchParams(location.search);
+let fails = 0;
+const ok = (what, c) => { log(`[predownload test] ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fails++; };
+const until = (pd, fn, ms) => new Promise((res, rej) => {
+  const t0 = performance.now(), iv = setInterval(() => {
+    if (fn(pd.state())) { clearInterval(iv); res(); } else if (performance.now() - t0 > ms) { clearInterval(iv); rej(new Error(`timed out in ${pd.state().phase}`)); }
+  }, 50);
+});
+const ended = (s) => ['done', 'stopped', 'error', 'busy'].includes(s.phase);
+const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+async function server(f, pos, len) {     // the server's bytes, asked again where a lossy server cuts the answer
+  for (let k = 1; ; k++) {
+    try {
+      return new Uint8Array(await (await fetch('/data/' + f.path.split('/').map(encodeURIComponent).join('/'),
+        { headers: { Range: `bytes=${pos}-${pos + len - 1}` }, cache: 'no-store' })).arrayBuffer());
+    } catch (x) { if (k >= 5) throw x; }
+  }
+}
+
+try {
+  const files = await manifestFiles();
+  if (q.has('full')) {
+    ok('the cache emptied', await deleteCache());
+    const pd = predownload({ log });
+    await pd.refresh();
+    const t0 = performance.now();
+    pd.start();
+    await until(pd, ended, 60 * 60e3);
+    const s = pd.state(), secs = (performance.now() - t0) / 1000;
+    ok(`the whole download: ${s.phase}, ${mb(s.have)} of ${mb(s.total)} in ${secs.toFixed(1)} s (${mb(s.got / secs)}/s), ${mb(s.wire)} on the network (${(100 * s.wire / s.got).toFixed(0)}%)`,
+       s.phase === 'done' && s.have === s.total);
+  } else {
+    const ahead = aheadFiles(files), maps = ahead.filter((f) => /\.(mmx|yro)$/i.test(f.path)).sort((a, b) => a.size - b.size).slice(0, 12);
+    const pick = ahead.filter((f) => f.path === 'multimd.mix' || f.path.startsWith('Taunts/')).concat(maps);
+    const only = pick.map((f) => f.path), T = pick.reduce((a, f) => a + f.size, 0);
+    log(`[predownload test]      ${pick.length} files, ${mb(T)}: multimd.mix, ${pick.filter((f) => f.path.startsWith('Taunts/')).length} taunts, ${maps.length} maps`);
+    ok('the cache emptied', await deleteCache());
+    const notes = [];
+    let last = 0, shrank = false, maxRate = 0;
+    const pd = predownload({ only, log: (s) => { notes.push(s); log(s); }, onUpdate: (s) => {
+      if (s.phase === 'running') { if (s.have < last) shrank = true; last = s.have; maxRate = Math.max(maxRate, s.rate); }
+    } });
+    await pd.refresh();
+    let s = pd.state();
+    ok(`before: none of it here (${mb(s.have)} of ${mb(s.total)})`, s.have === 0 && s.total === T && s.phase === 'idle');
+
+    pd.start();
+    await until(pd, (x) => x.have >= 0.4 * T || ended(x), 300e3);
+    await pd.stop();
+    s = pd.state();
+    const have1 = s.have, got1 = s.got;
+    ok(`stopped part way: ${mb(have1)} of ${mb(T)}`, s.phase === 'stopped' && have1 > 0 && have1 < T);
+    const k = await scanKept(pick);
+    ok('what it kept is named in the index once stopped', k.have === have1);
+    await pd.refresh();
+    ok('a refresh agrees', pd.state().have === have1 && pd.state().phase === 'stopped');
+
+    const t0 = performance.now();
+    pd.start();
+    await until(pd, ended, 600e3);
+    s = pd.state();
+    ok(`started again: done, ${mb(s.have)} of ${mb(T)}`, s.phase === 'done' && s.have === T);
+    ok(`nothing kept twice: ${mb(got1)} then ${mb(s.got)}`, got1 + s.got === T);
+    ok('the progress only grew', !shrank);
+    log(`[predownload test]      the second part: ${mb(s.got)} in ${((performance.now() - t0) / 1000).toFixed(1)} s, ${mb(s.wire)} on the network; the fastest rate shown ${mb(maxRate)}/s`);
+    ok(`fewer bytes on the network than of data (${mb(s.wire)} for ${mb(s.got)})`, s.wire > 0 && s.wire < s.got);
+    if (q.has('lossy')) ok('the cut answers made again', notes.some((n) => n.includes('again in')));
+
+    // every block, read past the cache's code
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(CACHE_DIR);
+    let named = 0, bad = 0, all = 0;
+    for (const f of pick) {
+      const key = keyOf(f), nb = Math.ceil(f.size / BLOCK);
+      all += nb;
+      const idx = new DataView(await (await (await dir.getFileHandle(key + '.idx')).getFile()).arrayBuffer()), data = await (await dir.getFileHandle(key)).getFile();
+      for (let bi = 0; bi < nb; bi++) {
+        const e = idx.getUint32(bi * 4, true);
+        if (!e) continue;
+        named++;
+        const len = Math.min(BLOCK, f.size - bi * BLOCK);
+        if (!same(new Uint8Array(await data.slice((e - 1) * BLOCK, (e - 1) * BLOCK + len).arrayBuffer()), await server(f, bi * BLOCK, len))) bad++;
+      }
+    }
+    ok(`every block there, the server's (${named} of ${all})`, named === all && bad === 0);
+
+    // another holder of the cache (a game, another tab)
+    const holder = await openDataCache({ files, note: () => {} });
+    const pd2 = predownload({ only, log: () => {} });
+    pd2.start();
+    await until(pd2, ended, 30e3);
+    ok('another holder of the cache: busy', pd2.state().phase === 'busy');
+    await holder.close();
+
+    // a full disk at the 3rd block
+    await deleteCache();
+    const fnotes = [], pd3 = predownload({ only, log: (s) => fnotes.push(s) });
+    pd3.start({ fault: { full: 3 } });
+    await until(pd3, ended, 120e3);
+    s = pd3.state();
+    ok(`a full disk: an error, told (${s.msg})`, s.phase === 'error' && /no room/.test(s.msg) && fnotes.some((n) => n.includes('no room')));
+    ok('a full disk: the 2 blocks before it kept', (await scanKept(pick)).have > 0 && s.got > 0);
+    await deleteCache();
+  }
+} catch (x) { fails++; log(`[predownload test] FAIL ${x?.stack ?? x}`); }
+log(`[predownload test] ${fails ? `${fails} failed` : 'all passed'}`);
+document.title = `EXIT ${fails ? 1 : 0}`;
+</script>
