@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>store test: running</title>
+<!--
+  The save store's test (store-worker.js): pass 1 on a fresh OPFS folder, a
+  reload, pass 2 on what pass 1 left. node tools/chrome.mjs --page tests/store
+  (the page sets its title to EXIT 0 or EXIT 1).
+-->
+<pre id="out"></pre>
+<script type="module">
+const out = document.getElementById('out');
+const pass = location.hash === '#2' ? 2 : 1;
+const w = new Worker(new URL('./store-worker.js', import.meta.url), { type: 'module' });
+w.onmessage = (e) => {
+  for (const l of e.data.lines) { console.log(`[store ${pass}] ${l}`); out.textContent += l + '\n'; }
+  if (!e.data.ok || pass === 2) { console.log(`[store] ${e.data.ok ? 'all passed' : `${e.data.fails} failed`}`); document.title = `EXIT ${e.data.ok ? 0 : 1}`; }
+  else { location.hash = '#2'; location.reload(); }
+};
+w.postMessage({ pass });
+</script>
