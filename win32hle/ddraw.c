@@ -9,9 +9,13 @@
  * through hle_dd_frame. Nothing is exclusive and nothing touches a real
  * display mode.
  *
- * Each surface gets a 64 KB tail behind its last row: a 1990s blitter that
- * checks only where a block starts runs past the bottom (Tiberian Sun's movie
- * decoder does, by up to 4.6 KB), into slack Windows happens to leave.
+ * Each surface's pixels have SURF_GUARD_ROWS rows kept clear in front of them
+ * and as many behind (64 KB behind at the least): a 1990s blitter that checks
+ * only where a block starts runs past the bottom (Tiberian Sun's movie decoder
+ * does, by up to 4.6 KB), into slack Windows happens to leave, and the Steam
+ * release of Red Alert 2 and Yuri's Revenge keeps 64 rows on each side
+ * (DDrawCompat's SurfacePatches = top:64, bottom:64). None was seen written
+ * here (HLE_SURF_GUARD, below), but it costs ~100 KB a surface at 800x600.
  */
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -59,6 +63,8 @@
 #define DDBLTFAST_SRCCOLORKEY  0x00000001u
 #define DDCKEY_SRCBLT          0x00000008u
 #define SURF_TAIL              (64u << 10)
+#define SURF_GUARD_ROWS        64        /* rows kept clear in front of a surface's pixels and behind */
+#define GUARD_ROWS             200       /* HLE_SURF_GUARD's rows instead, looked at */
 
 /* ---- the display ---- */
 static int g_mode_w = 640, g_mode_h = 480, g_mode_bpp = 16, g_mode_set;
@@ -134,12 +140,49 @@ static void put_desc(uint32_t d, surf_t *s) {
     MEM32(d + 104) = s->caps;
 }
 
+/* HLE_SURF_GUARD=1, a test: every surface's pixels get GUARD_ROWS rows in
+ * front and behind (the tail's 64 KB at the least), both filled with 0xA5,
+ * and every 2 s the live surfaces are looked at: what a game wrote outside
+ * its rows is logged as it grows. (DDrawCompat's SurfacePatches, cnc-ddraw's
+ * guard_lines: both keep such rows, for games that write past a surface.) */
+static int g_guard = -1;
+static int guard_on(void) { if (g_guard < 0) g_guard = getenv("HLE_SURF_GUARD") != NULL; return g_guard; }
+typedef struct { uint8_t *base; uint32_t head, body, tail, pitch; int w, h, bpp; uint32_t above, below; } guard_t;
+static guard_t g_guards[512];
+static int g_nguards;
+static uint32_t g_guard_t;
+static void guard_look(guard_t *g, const char *when) {
+    uint32_t above = 0, below = 0, rows_above = 0, rows_below = 0;
+    for (uint32_t i = 0; i < g->head; i++) if (g->base[i] != 0xA5) { if (!above) rows_above = (g->head - i + g->pitch - 1) / g->pitch; above++; }
+    const uint8_t *t = g->base + g->head + g->body;
+    for (uint32_t i = 0; i < g->tail; i++) if (t[i] != 0xA5) { below++; rows_below = i / g->pitch + 1; }
+    if (above > g->above || below > g->below)
+        fprintf(stderr, "[ddraw] guard (%s): a %dx%dx%d surface written outside: %u bytes above it (up to row -%u), %u below (up to row %d+%u)\n",
+                when, g->w, g->h, g->bpp, above, rows_above, below, g->h, rows_below);
+    if (above > g->above) g->above = above;
+    if (below > g->below) g->below = below;
+}
+static void guard_check(void) {
+    uint32_t now = hle_ticks_ms();
+    if (now - g_guard_t < 2000) return;
+    g_guard_t = now;
+    for (int i = 0; i < g_nguards; i++) guard_look(&g_guards[i], "running");
+}
+
 static uint32_t new_surface(int w, int h, int bpp, uint32_t caps, int primary) {
     surf_t *s = (surf_t *)hle_alloc(sizeof *s);
     s->w = w, s->h = h, s->bpp = bpp, s->caps = caps, s->primary = primary;
     s->pitch = ((w * (bpp / 8)) + 3) & ~3;
-    s->px = s->own_px = (uint8_t *)hle_alloc((uint32_t)s->pitch * (uint32_t)h + SURF_TAIL);
-    if (!s->px) hle_fatal("no guest memory for a %dx%d surface", w, h);
+    uint32_t body = (uint32_t)s->pitch * (uint32_t)h, head = (guard_on() ? GUARD_ROWS : SURF_GUARD_ROWS) * (uint32_t)s->pitch;
+    uint32_t tail = head > SURF_TAIL ? head : SURF_TAIL;
+    uint8_t *base = (uint8_t *)hle_alloc(head + body + tail);
+    if (!base) hle_fatal("no guest memory for a %dx%d surface", w, h);
+    s->own_px = base, s->px = base + head;
+    if (guard_on() && g_nguards < 512) {
+        memset(base, 0xA5, head); memset(base + head + body, 0xA5, tail);
+        g_guards[g_nguards++] = (guard_t){ base, head, body, tail, (uint32_t)s->pitch, w, h, bpp, 0, 0 };
+        fprintf(stderr, "[ddraw] guard: a %dx%dx%d surface, %d rows kept clear on each side\n", w, h, bpp, GUARD_ROWS);
+    }
     masks(bpp, &s->rmask, &s->gmask, &s->bmask);
     uint32_t o = hle_com_new(g_vt_surf, 12);
     MEM32(o + 8) = hle_va(s);
@@ -148,6 +191,8 @@ static uint32_t new_surface(int w, int h, int bpp, uint32_t caps, int primary) {
 }
 static void free_surface(surf_t *s) {
     if (g_primary == s) g_primary = NULL, g_frame_seq++;
+    for (int i = 0; i < g_nguards; i++)
+        if (g_guards[i].base == s->own_px) { guard_look(&g_guards[i], "released"); g_guards[i] = g_guards[--g_nguards]; break; }
     if (s->palette) { uint32_t p = s->palette; if (--MEM32(p + 4) == 0) { hle_free(P(p)); hle_com_free(p); } }
     hle_free(s->own_px);
     hle_free(s);
@@ -193,6 +238,8 @@ static void dd_CreateSurface(void) {                     /* (this, &DDSURFACEDES
     surf_t *s = S(o);
     if (fl & DDSD_CKSRCBLT) s->ck_src = 1, s->ck_lo = MEM32(d + 64), s->ck_hi = MEM32(d + 68);
     if (fl & DDSD_LPSURFACE && MEM32(d + 36)) {           /* the game's own memory */
+        for (int i = 0; i < g_nguards; i++)
+            if (g_guards[i].base == s->own_px) { guard_look(&g_guards[i], "replaced"); g_guards[i] = g_guards[--g_nguards]; break; }
         hle_free(s->own_px);
         s->own_px = NULL;
         s->px = (uint8_t *)hle_ptr(MEM32(d + 36));
@@ -372,6 +419,7 @@ static void get_rect(uint32_t r, const surf_t *s, int *l, int *t, int *rr, int *
  * each change here (screen.c). */
 void (*hle_dd_primary_hook)(void);
 static void mark(surf_t *d) {
+    if (g_nguards) guard_check();
     if (d != g_primary) return;
     g_frame_seq++;
     if (hle_dd_primary_hook) hle_dd_primary_hook();
