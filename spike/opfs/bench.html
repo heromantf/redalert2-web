@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>opfs bench: running</title>
+<!--
+  What the game data's OPFS cache would cost, measured in this browser: a cache
+  file's handles opened, a 1 MiB block written, flushed and read back, a 1-byte
+  map write; whether two workers (as two tabs would) can hold the same file at
+  once in either mode; what a sparse file counts against the quota.
+    node tools/chrome.mjs --page /spike/opfs/bench    (the title: EXIT 0)
+-->
+<pre id="out"></pre>
+<script type="module">
+const out = document.getElementById('out');
+const say = (s) => { console.log(s); out.textContent += s + '\n'; };
+const run = (what) => new Promise((res) => {
+  const w = new Worker(new URL('./bench-worker.js', import.meta.url), { type: 'module' });
+  w.onmessage = (e) => { if (e.data.line) say(e.data.line); if (e.data.done) { res(e.data); w.terminate(); } };
+  w.postMessage(what);
+});
+try {
+  await run({ t: 'bench' });
+  // two workers on one file: the first holds it, the second tries
+  const a = new Worker(new URL('./bench-worker.js', import.meta.url), { type: 'module' });
+  for (const mode of ['readwrite', 'readwrite-unsafe']) {
+    const held = await new Promise((res) => { a.onmessage = (e) => e.data.held !== undefined && res(e.data.held); a.postMessage({ t: 'hold', mode }); });
+    const r = await run({ t: 'try', mode }), p = await run({ t: 'peek' });
+    say(`two holders, mode ${mode}: the first ${held ? 'holds it' : 'could not'}, the second ${r.ok ? 'opened it too' : `could not (${r.err})`}${r.saw !== undefined ? `, and reads the first's byte: ${r.saw}` : ''}`);
+    say(`  meanwhile getFile(): ${p.ok ? `reads it (the byte: ${p.saw})` : `fails (${p.err})`}`);
+    await new Promise((res) => { a.onmessage = (e) => e.data.released && res(); a.postMessage({ t: 'release' }); });
+  }
+  a.terminate();
+  await run({ t: 'clean' });
+  document.title = 'EXIT 0';
+} catch (x) { say(`FAIL ${x?.stack ?? x}`); document.title = 'EXIT 1'; }
+</script>

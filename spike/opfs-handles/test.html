@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>opfs handles</title>
+<script type="module">
+const q = new URLSearchParams(location.search);
+const runs = q.has('close') ? [{ variant: 'closeafter', n: 300 }, { variant: 'closewhile', n: 300 }, { variant: 'closeafter', n: 300, write: true }, { variant: 'closewhile', n: 300, write: true }] : q.has('twice') ? [{ variant: 'twice' }] : q.has('lanes') ? Array.from({ length: +q.get('lanes') || 5 }, () => ({ variant: 'lanes', files: 323, write: true })) : q.has('quick') ? [{ variant: 'reopen', n: 20 }] : [{ variant: 'reopen', n: 400 }, { variant: 'lru', files: 323 }, { variant: 'idx', files: 323 }, { variant: 'idx', files: 323, write: true }];
+for (const r of runs) {
+  const w = new Worker('./worker.js', { type: 'module' });
+  w.onerror = (e) => console.log('[spike] worker error: ' + e.message);
+  await new Promise((res) => { w.onmessage = (e) => { if (e.data.log) console.log('[spike] ' + e.data.log); if (e.data.done) { console.log('[spike] ' + e.data.done); w.terminate(); res(); } }; w.postMessage(r); });
+}
+document.title = 'EXIT 0';
+</script>

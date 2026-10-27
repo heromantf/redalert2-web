@@ -1,0 +1,9 @@
+pass menu-options         exit 4       dialogs C6 E2 D5
+pass skirmish-build       exit 4       dialogs C6 E2 100 102; in game, 69 distinct frames; 640x480; produce x3; place x11
+pass skirmish-loop        exit 4       dialogs C6 E2 100 102 108 102; in game, 70 distinct frames; human defeated; 800x600
+pass campaign-soviet      exit 4       dialogs C6 E2 100 94; in game, 89 distinct frames; 640x480
+0 of 4 failed
+skirmish-build       [stackmark] deepest: main thread stack deepest 88 KB of 8176 KB
+skirmish-loop        [stackmark] deepest: main thread stack deepest 87 KB of 8176 KB
+campaign-soviet      [stackmark] deepest: main thread stack deepest 67 KB of 8176 KB
+menu-options         [stackmark] deepest: main thread stack deepest 67 KB of 8176 KB

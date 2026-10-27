@@ -1,0 +1,9 @@
+node v24.21.0
+  node worker, stackSizeMb 1: {"small":[12635,12635,12799],"16 locals":[4211,16847,16847]}
+  node worker, stackSizeMb 4: {"small":[65535,494303,494303],"16 locals":[24575,82383,82383]}
+  node main thread: {"small":[15426,123413,123413],"16 locals":[5141,8191,20568]}
+Google Chrome 155.0.8059.85 
+  chrome worker: {"small":[7934,7934,7935],"16 locals":[2644,2644,2687]}
+  chrome page: {"small":[123293,123293,123293],"16 locals":[20548,20548,20548]}
+w.onmessage = (e) => { lines.push('  chrome worker: ' + JSON.stringify(e.data)); eval(src); lines.push('  chrome page: ' + JSON.stringify(runProbe())); done(); };
+w.onerror = (e) => { lines.push('  chrome worker error: ' + e.message); done(); };

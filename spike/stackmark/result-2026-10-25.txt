@@ -1,0 +1,17 @@
+pass menu-options         exit 4       dialogs C6 E2 D5
+pass movies-credits       exit 4       dialogs C6 E2 101
+pass skirmish-start       exit 4       dialogs C6 E2 100 102; in game, 54 distinct frames; 640x480
+pass skirmish-forcefire   exit 4       dialogs C6 E2 100 102; in game, 54 distinct frames; 640x480
+pass skirmish-build       exit 4       dialogs C6 E2 100 102; in game, 68 distinct frames; 640x480; produce x3; place x11
+pass skirmish-loop        exit 4       dialogs C6 E2 100 102 108 102; in game, 85 distinct frames; human defeated; 800x600
+pass campaign-allied      exit 4       dialogs C6 E2 100 94; in game, 47 distinct frames; 640x480
+pass campaign-soviet      exit 4       dialogs C6 E2 100 94; in game, 89 distinct frames; 640x480
+0 of 8 failed
+skirmish-start       [stackmark] grew: main thread stack deepest 87 KB of 8176 KB
+skirmish-build       [stackmark] grew: main thread stack deepest 88 KB of 8176 KB
+skirmish-forcefire   [stackmark] grew: main thread stack deepest 87 KB of 8176 KB
+campaign-allied      [stackmark] grew: main thread stack deepest 44 KB of 8176 KB
+campaign-soviet      [stackmark] grew: main thread stack deepest 44 KB of 8176 KB
+menu-options         [stackmark] grew: main thread stack deepest 51 KB of 8176 KB
+movies-credits       [stackmark] grew: main thread stack deepest 44 KB of 8176 KB
+skirmish-loop        [stackmark] grew: main thread stack deepest 87 KB of 8176 KB

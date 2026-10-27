@@ -1,0 +1,17 @@
+pass skirmish-forcefire   exit 4       dialogs C6 E2 100 102; in game, 54 distinct frames; 640x480
+pass skirmish-build       exit 4       dialogs C6 E2 100 102; in game, 69 distinct frames; 640x480; produce x3; place x11
+pass skirmish-loop        exit 4       dialogs C6 E2 100 102 108 102; in game, 94 distinct frames; human defeated; 800x600
+pass campaign-soviet      exit 4       dialogs C6 E2 100 94; in game, 90 distinct frames; 640x480
+0 of 4 failed
+skirmish-build       [stackmark] deepest: main thread stack deepest 88 KB of 8176 KB
+                     [stackmark] chain: 68 KB in 13 frames: lifted 7 frames 1 KB, other 67 KB; largest: av_packet_side_data_to_frame 49840 B x1, (stack top: the environment, arguments, dyld) 10592 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+                     [stackmark] lifted: 27 KB in 51 frames: lifted 26 frames 3 KB, other 23 KB; largest: (stack top: the environment, arguments, dyld) 10592 B x1, main 6352 B x1, hle_call_guest 2016 B x7, start 1632 B x1, k_CreateFileA 1280 B x1,
+skirmish-forcefire   [stackmark] deepest: main thread stack deepest 87 KB of 8176 KB
+                     [stackmark] chain: 67 KB in 15 frames: lifted 7 frames 1 KB, other 66 KB; largest: av_malloc 49984 B x1, (stack top: the environment, arguments, dyld) 9248 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+                     [stackmark] lifted: 22 KB in 43 frames: lifted 39 frames 5 KB, other 17 KB; largest: (stack top: the environment, arguments, dyld) 9248 B x1, main 6352 B x1, sub_0056CB90 3456 B x24, start 1632 B x1, hle_call_guest 288 B x1,
+campaign-soviet      [stackmark] deepest: main thread stack deepest 68 KB of 8176 KB
+                     [stackmark] chain: 66 KB in 13 frames: lifted 7 frames 1 KB, other 65 KB; largest: _platform_memset 49792 B x1, (stack top: the environment, arguments, dyld) 9072 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+                     [stackmark] lifted: 20 KB in 34 frames: lifted 26 frames 3 KB, other 17 KB; largest: (stack top: the environment, arguments, dyld) 9072 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1, sub_0048CCC0 192 B x1,
+skirmish-loop        [stackmark] deepest: main thread stack deepest 87 KB of 8176 KB
+                     [stackmark] chain: 66 KB in 13 frames: lifted 7 frames 1 KB, other 65 KB; largest: av_packet_side_data_to_frame 49840 B x1, (stack top: the environment, arguments, dyld) 9104 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+                     [stackmark] lifted: 27 KB in 81 frames: lifted 77 frames 10 KB, other 16 KB; largest: (stack top: the environment, arguments, dyld) 9104 B x1, sub_0056CB90 8928 B x62, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,

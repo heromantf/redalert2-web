@@ -1,0 +1,25 @@
+pass menu-options         exit 4       dialogs C6 E2 D5
+pass movies-credits       exit 4       dialogs C6 E2 101
+pass skirmish-start       exit 4       dialogs C6 E2 100 102; in game, 54 distinct frames; 640x480
+pass skirmish-forcefire   exit 4       dialogs C6 E2 100 102; in game, 54 distinct frames; 640x480
+pass skirmish-build       exit 4       dialogs C6 E2 100 102; in game, 68 distinct frames; 640x480; produce x3; place x11
+pass skirmish-loop        exit 4       dialogs C6 E2 100 102 108 102; in game, 63 distinct frames; human defeated; 800x600
+pass campaign-allied      exit 4       dialogs C6 E2 100 94; in game, 47 distinct frames; 640x480
+pass campaign-soviet      exit 4       dialogs C6 E2 100 94; in game, 89 distinct frames; 640x480
+0 of 8 failed
+skirmish-start       [stackmark] deepest: main thread stack deepest 87 KB of 8176 KB
+                     [stackmark] chain: 66 KB in 13 frames: lifted 7 frames 1 KB, other 65 KB; largest: av_packet_side_data_to_frame 49840 B x1, (stack top: the environment, arguments, dyld) 9072 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+skirmish-build       [stackmark] deepest: main thread stack deepest 88 KB of 8176 KB
+                     [stackmark] chain: 68 KB in 13 frames: lifted 7 frames 1 KB, other 67 KB; largest: av_packet_side_data_to_frame 49792 B x1, (stack top: the environment, arguments, dyld) 10592 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+skirmish-forcefire   [stackmark] deepest: main thread stack deepest 87 KB of 8176 KB
+                     [stackmark] chain: 67 KB in 13 frames: lifted 7 frames 1 KB, other 65 KB; largest: av_packet_side_data_to_frame 49840 B x1, (stack top: the environment, arguments, dyld) 9248 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+campaign-allied      [stackmark] deepest: main thread stack deepest 68 KB of 8176 KB
+                     [stackmark] chain: 66 KB in 13 frames: lifted 7 frames 1 KB, other 65 KB; largest: av_packet_side_data_to_frame 49840 B x1, (stack top: the environment, arguments, dyld) 9072 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+campaign-soviet      [stackmark] deepest: main thread stack deepest 68 KB of 8176 KB
+                     [stackmark] chain: 66 KB in 13 frames: lifted 7 frames 1 KB, other 65 KB; largest: av_packet_side_data_to_frame 49840 B x1, (stack top: the environment, arguments, dyld) 9072 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+menu-options         [stackmark] deepest: main thread stack deepest 67 KB of 8176 KB
+                     [stackmark] chain: 66 KB in 13 frames: lifted 7 frames 1 KB, other 65 KB; largest: avcodec_get_hw_frames_parameters 49872 B x1, (stack top: the environment, arguments, dyld) 8880 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+movies-credits       [stackmark] deepest: main thread stack deepest 67 KB of 8176 KB
+                     [stackmark] chain: 66 KB in 13 frames: lifted 7 frames 1 KB, other 65 KB; largest: av_packet_side_data_to_frame 49792 B x1, (stack top: the environment, arguments, dyld) 8928 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
+skirmish-loop        [stackmark] deepest: main thread stack deepest 87 KB of 8176 KB
+                     [stackmark] chain: 52 KB in 13 frames: lifted 7 frames 1 KB, other 51 KB; largest: av_packet_side_data_to_frame 35504 B x1, (stack top: the environment, arguments, dyld) 9104 B x1, main 6352 B x1, start 1632 B x1, hle_call_guest 288 B x1,
