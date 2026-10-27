@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cache test: running</title>
+<!--
+  The game data's OPFS cache (data-cache.js, through http-backend.js), tried
+  out in workers over three loads of this page (cache-worker.js says what each
+  checks): a fresh cache filled and read back, another tab meanwhile; after a
+  reload, everything from OPFS, a stale file and a broken index dealt with,
+  every block it names compared with the server's; a full disk and a lossy
+  server. Every read is compared with the server's own bytes.
+    node tools/chrome.mjs --page tests/cache    (the title: EXIT 0 or EXIT 1)
+  On a port of its own (chrome.mjs's default): pass 3 empties the cache.
+  ?verify: only every block the site's cache names against the server's (after
+  a game run on the same port: --port N --query verify).
+-->
+<pre id="out"></pre>
+<script type="module">
+const out = document.getElementById('out');
+const log = (s) => { console.log(s); out.textContent += s + '\n'; };
+const pass = +(location.hash.slice(1) || 1), only = new URLSearchParams(location.search).has('verify');
+function run(msg, onHold) {
+  return new Promise((res) => {
+    const w = new Worker(new URL('./cache-worker.js', import.meta.url), { type: 'module' });
+    w.onmessage = async (e) => {
+      if (e.data.t === 'holding') { await onHold(); w.postMessage({ t: 'go' }); return; }
+      res(e.data); w.terminate();
+    };
+    w.postMessage(msg);
+  });
+}
+const show = (who, r) => { for (const l of r.notes) log(`[cache ${who}]      ${l}`); for (const l of r.lines) log(`[cache ${who}] ${l}`); };
+let fails = 0;
+if (only) {
+  const v = await run({ pass, role: 'verify' });
+  show('verify', v);
+  document.title = `EXIT ${v.fails ? 1 : 0}`;
+} else {
+  const main = await run({ pass, role: 'main' }, async () => {
+    const other = await run({ pass, role: 'other' });
+    show(`${pass}, another tab`, other); fails += other.fails;
+  });
+  show(pass, main); fails += main.fails;
+  if (fails || pass === 3) { log(`[cache] ${fails ? `${fails} failed` : 'all passed'}`); document.title = `EXIT ${fails ? 1 : 0}`; }
+  else { location.hash = '#' + (pass + 1); location.reload(); }
+}
+</script>
