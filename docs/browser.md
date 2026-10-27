@@ -1,0 +1,315 @@
+# In the browser
+
+The game on a page (phase 1b): Chrome, the picture and input, movies, sound,
+saves, the free disk space, Windows' timer, keys and mouse, the Steam
+release's wrappers, the game as shipped. The game data has its own notes
+(`docs/data.md`), online play too (`docs/online.md`). Moved here from README.md as it was written at the time;
+the experiments behind it are in `spike/`.
+
+## Phase 1b: the browser
+
+**First step done (2026-10-26): the same headless run in Chrome 155.**
+
+- The host was split into a shared core (`host/core/`: a game thread with its
+  WASI and thread-spawn, and the I/O worker's file calls over a backend) and
+  thin adapters: Node's (`host/node/`, node:fs) and the browser's (`web/`:
+  Worker, the game data over HTTP). The Node run is unchanged (same checksum).
+- `web/server.mjs` serves the page, the module and the game data (byte ranges,
+  a manifest, COOP/COEP for SharedArrayBuffer, `no-store`), on 127.0.0.1.
+  `tools/chrome.mjs` opens the installed Chrome through playwright-core (no
+  browser downloaded), its profile and disk cache under `work/`.
+- In Chrome: the 119 MB module fetched in ~350 ms and compiled in ~70 ms, 16
+  threads in ~50 ms. To the main menu the game read 151 blocks of 1 MiB
+  (135 MB); the menu's first frame has the native checksum (`C5727BA3`).
+- The scripted skirmish: at the game's pace 6.4 ms between frames, as
+  natively. Uncapped (`FAST=1`), the first 10 x 2,000 in-game frames, before
+  any of the three games is decided: native 0.535 ms a frame, Node 0.75 ms
+  (1.40x), **Chrome 0.73 ms (1.36x)**.
+
+**The picture and input done (2026-10-26).**
+
+- `wasi/screen.c` publishes each new frame as RGB565 into the next of three
+  buffers (8- and 32-bit frames converted) and bumps a sequence; the page reads
+  the newest at its pace. It says too whether the page shows a cursor (the
+  game's menus use the Windows cursor, made from the game's own 32x32 masks; in
+  a game the game draws its own) and drains a ring of the page's input events
+  into win32hle (`hle_input_mouse`, `hle_input_key`). Both structures reach
+  the page through one host import, `ra2web.register(kind, ptr, size)`.
+- `web/presenter.js`: WebGL2, the frame uploaded as RGB565 as it is,
+  letterboxed, scaled sharp-bilinear (the native default) in the shader.
+  `web/input.js`: pointer events at game pixels, keys from the whole window
+  through the native presenter's virtual-key and scan-code table, held keys
+  let go on blur. `web/play.html`: the game's page; `tools/play.sh` starts the
+  server and a Chrome window with a profile of its own (in `work/`).
+- The page passed `--headless` (no native window: no HD vehicles machinery, no
+  F10 menu) and got the picture all the same: `main.c` was unchanged. (Since
+  2026-10-26 the web has a host of its own, `wasi/main.c`, and no such flag.)
+- Checked in Chrome through `tools/chrome.mjs --page play` (screenshots in
+  `work/runs/shots`): the main menu drawn (60 fps, 800x600 scaled to
+  1280x960); real clicks at game pixels open Single Player (0x100) and the
+  skirmish screen (0x102) and start the game; in the game (640x480) the page's
+  H key centres the view on the base. The Node run is unchanged (checksum).
+- Found on the way: a page loaded without a click gives no element the focus,
+  so keys are taken from the window, not the canvas.
+
+The goal (2026-10-26): playing over the LAN with friends, the server on this
+Mac and their browsers joining it. Next, in this order:
+
+1. ~~The picture and input~~ (done, above).
+   ~~Movies~~ (done, below).
+2. ~~Sound~~ (done, below).
+3. ~~Saves and settings that outlive the page~~ (done, below).
+4. The LAN: the server on the LAN's address, and a secure context for the
+   friends' browsers: HTTPS from the server, or (for now, measured) Chrome
+   started with `--unsafely-treat-insecure-origin-as-secure=http://IP:PORT`.
+   A plain `http://` address that is not the machine's own has no
+   SharedArrayBuffer, no OPFS and no Web Locks: the game would not start.
+   ~~The game data's blocks kept in OPFS~~ (done, below).
+5. Multiplayer: no UDP in a browser, so the game's IPX/UDP through a
+   WebSocket relay on the server (a virtual LAN switch, as nfsu2-web's).
+   On hold (2026-10-26): the user may have another idea for it.
+   To mind then: the game tells machines apart by a session UniqueID
+   (`sub_00697AD0`) mixed from `timeGetTime`, the free disk space (win32hle's
+   is a constant 2047 MB, below) and each character of `PATH` (a
+   page has none): in the browser it is mostly the millisecond, and native
+   playtests started at the same moment got the same one. A random `PATH` per browser, kept, would make
+   it unique with no change to the game.
+6. ~~Fonts for GDI text~~: not needed for RA2 (2026-10-26, measured: the game
+   draws all its text with its own fonts; no text or font call in 70 M import
+   calls over menus, skirmish, campaign, options, load and, natively, the LAN
+   lobby; the list screens byte-identical with and without fonts:
+   `spike/gditext/RESULT.md`).
+
+**Movies done (2026-10-26).** `wasi/ffmpeg.sh` cross-compiles FFmpeg 9.0.2
+(the source from ffmpeg.org, checked against Homebrew's sha256) with wasi-sdk:
+only Bink's demuxer, video and audio decoders, MP3's (Miles' codec, `mss.c`)
+and libswresample, no assembly, no threads, the game module's wasm features;
+3.3 MB of static libraries in 39 s. `wasi/build.sh` then compiles win32hle's
+own `bink.c` and `mss.c` with `HLE_WITH_FFMPEG`, as the native build does, and
+links them (the module grows 1.1 MB); `wasi/bink.c`'s black movies remain the
+build without FFmpeg. Checked: the intro (800x600, 190 frames) and the main
+menu's background (632x570, 431 frames) as natively, and the checksums of
+the frames sampled during the intro (`B1C76FB6`, `6D1040EF`) are the native
+build's (FFmpeg 8.1 there), so the decoding is the same to the pixel; in
+Chrome the menu's background moves and the Soviet campaign's briefing plays at
+15 fps with its Chinese subtitles (`work/runs/shots/briefing-2.png`). The
+movies' sound goes to the mixer, and from there to the speakers (below).
+
+**Sound done (2026-10-26).** `wasi/sdl.c`'s audio device (the thread that
+runs DirectSound's mixer, 44.1 kHz 16-bit stereo, 1024 frames a call) mixes
+into a ring in shared memory (16,384 frames, ~370 ms; `ra2web.register`
+kind 3), and `web/audio-worklet.js` plays it on the browser's audio thread
+(`web/audio.js`: an AudioContext at 44.1 kHz, no resampling). While the page
+plays, the sound card's clock paces the mixer: it mixes another buffer whenever
+the ring holds less than 4,096 frames (~93 ms), so the clocks cannot drift and
+DirectSound's play cursors move with the speakers; before the page plays (a
+browser starts sound after a gesture: the first click or key) and under Node,
+the mixer keeps its own clock, into nothing, as before. The page no longer
+passes `--mute`. Checked in Chrome (`tools/chrome.mjs --wav` saves what the
+speakers get): the context runs at 44.1 kHz with 5 ms of output latency;
+44,160 frames played a second; the intro's sound, silence while loading, the
+menu's music (`Theme::PlaySong`) and a skirmish's music as RMS 0.05-0.18;
+0 short quanta to the main menu and 2 in a 100 s skirmish (of 128 frames);
+the frame pacing unchanged (6.4 ms). The captures are music, not noise: their
+spectrograms show harmonics and beats (`work/runs/*-spectrum.png`), 2,600-2,800
+zero crossings a second (white noise at 44.1 kHz: ~22,000), left and right
+correlated 0.60-0.88, nothing clipped.
+
+**Saves and settings done (2026-10-26).** `web/save-store.js` keeps the
+overlay (what the game writes) in the site's OPFS: a folder per save set
+(`?save=`, default `ra2yr`; the test page `ra2yr-test`; `?fresh` empties it
+first), a file there for every file the game wrote at its path in the game
+folder, `_gone.json` for the data files it deleted; read and written through
+synchronous access handles in the I/O worker, one per file however often it
+is open; an index walked at start ("[save] ... files kept from before"). In
+memory where a browser has no OPFS. The data layer is unchanged (blocks over
+HTTP, in memory). The play page asks for persistent storage (headless Chrome
+says no: Chrome grants it to sites it sees used, bookmarked or installed;
+without it only a disk short of room would make it clear the folder). A site
+is a scheme, host and port: `tools/play.sh` keeps port 8780, so its saves stay;
+another address starts empty. Checked in Chrome: a skirmish started writes
+`RA2MD.INI` into OPFS, and the next page load (same site, same set) finds it
+kept (1,699 bytes); `web/tests/store.html` (`tools/chrome.mjs --page
+tests/store`) passes 18 checks over a reload: a file new, a data file copied
+and written, truncated, renamed (an overlay file and a data file), deleted
+(both), a folder with a file in it, a file open twice at once, all of it
+there after the reload and the deleted data file still gone.
+
+**The free disk space (2026-10-26).** The game asks KERNEL32 for
+`GetDiskFreeSpaceExA` by `GetProcAddress` (`sub_0048DD50`: under 8 MB at
+start it asks whether to go on, under 2 MB a save is refused as "disk full",
+and the session UniqueID mixes it in). win32hle had none ("GetProcAddress
+failed ... 127" in the log), so it took `GetDiskFreeSpaceA`, whose answer is a
+constant 2047 MB (what Windows tells a program that old). win32hle
+(`win32hle/kernel32_ext.c`) now answers the Ex call too, with the same
+constant: 2047 MB free of 4 GB, nothing here. Under 2 GB on purpose: the game
+reads the count's low half as signed (`fiadd` at 0x0048DDCC), so whenever that
+half's top bit is set it comes out 4 GB short, or below 0 (measured: 6 GB read
+as 2048 MB, 3 GB as 4,193,280), though both its checks compare unsigned and
+pass anyway. A real figure (the disk's, OPFS's quota) was tried and dropped
+as not worth what it took. Checked natively, under Node and in Chrome: "Using
+GetDiskFreeSpaceEx", "Free disk space is 2047 Mb", no GetProcAddress
+failure, the main menu reached.
+
+**Windows' timer, the keys and the mouse (2026-10-26).** Three things a
+friend on Windows would meet, before multiplayer.
+- The timer (`spike/timer/RESULT.md`): Chrome on Windows wakes a timed
+  `Atomics.wait` on a 15.6 ms OS timer at times (nfsu2-web measured it), and
+  every timed wait of the game comes to `host/core/thread.mjs`: its main loop
+  sleeps a millisecond at a time, ~390 times a second. Simulated
+  (`RA2WEB_TIMER_MS=15.625`: every wait ended on that grid), the scripted
+  skirmish ran 184-197 game frames in 3.33 s instead of 201-209, and the
+  sound was short 8 times. Now `host/core/timer-probe.mjs` (a worker) keeps
+  measuring how late a 1 ms wait wakes; where the median is later than 3 ms
+  a sleep under 8 ms waits for all but that and spins the rest: 197-209 and
+  the sound never short, the main thread spinning (~0.9 of a core) on a
+  coarse timer only. On this Mac's timer nothing spins.
+- Full screen (`web/fullscreen.js`): the start panel's choice (on), the
+  bar's button, Alt+Enter as cnc-ddraw has it. The page full screen, the keys
+  locked (Keyboard Lock: Escape, Ctrl+number, Alt reach the game; Escape held
+  leaves) and the mouse locked in the picture (Pointer Lock): `input.js` then
+  moves a cursor of its own by the mouse's moves, held in the picture, so it
+  reaches an edge and stays there, and the presenter draws the game's menu
+  cursor there (in a game the game draws its own).
+- The edges in a window: the mouse that leaves the canvas leaves the game's
+  cursor at the edge it crossed, so the map goes on scrolling, as against a
+  screen's edge; the window losing the focus moves it 2 pixels in. (Since
+  then a window keeps the mouse too, below; this is what is left where the
+  browser will not keep it.)
+
+Checked in Chrome (`spike/input/RESULT.md`, the game's view position read
+from its memory: `TacticalClass` at `*(0x887324)`, x at `+0xB0`): scrolling
+at each edge, beyond the window, stopped by the focus lost; Alt+Enter full
+screen with the keys locked, Escape reaching the game (its menu) while the
+page stays full screen; the locked mouse simulated (headless Chrome gives no
+Pointer Lock): it starts at the game's cursor, moves at the picture's scale,
+holds at the edges (the map scrolls), the page's cursor drawn in the menus and
+not in a game. Not tested: a real Pointer Lock (it would take this Mac's
+mouse), and anything on Windows itself.
+
+**What the Steam release's wrappers do, taken (2026-10-26).** The Steam copy
+(EA's The Ultimate Collection, 2024) ships DDrawCompat 0.5.4 as `ddraw.dll`
+and ipxemu 1.0.4 as `wsock32.dll`, which the lift never loads (win32hle is
+both), and its `game.exe` and `gamemd.exe` patched in place (no CD: the CD's
+search looks at `.\`; the version shown as 1.001TUC), which the lift has.
+From DDrawCompat's settings (its wiki: 62) and cnc-ddraw's (`config.c`, with
+its Red Alert 2 sections), what applies here:
+- Not kept: the menus' message loop held (DDrawCompat's `FpsLimiter =
+  msgloop(120)`). Tried in win32hle's `PeekMessageA` (empty looks held to N
+  a second): 40 s idle in the main menu took native 5.4 s of CPU instead of
+  36.8 at 480, and the menu in Chrome kept 57-60 frames a second (45 at 120,
+  55-58 at 240); taken out again (2026-10-26, the user's choice): the menus
+  poll the empty queue as on Windows, a core busy while they show.
+- Rows kept clear around every surface (DDrawCompat's `SurfacePatches =
+  top:64, bottom:64`, cnc-ddraw's `guard_lines`): win32hle kept 64 KB behind
+  a surface only; now 64 rows in front and behind (`ddraw.c`, ~100 KB a
+  surface at 800x600). `HLE_SURF_GUARD=1` keeps 200 rows each side filled
+  with a pattern and logs what the game writes there: nothing, in a skirmish
+  scrolled to all four edges and the start of both campaigns.
+- Scaling (`web/presenter.js`), each wrapper's as its source computes it.
+  DDrawCompat's `DisplayFilter` (`ShaderBlitter.cpp`, `Shaders/*.hlsl`):
+  bilinear with its blur 0-100 (0, the default there and here, is sharp;
+  100 the plain bilinear), point (EA's choice in the Steam copy), integer,
+  bicubic with its blur (Mitchell-Netravali, 0 being Catmull-Rom), lanczos
+  and spline with 2-4 lobes; in linear light, one axis a pass, more taps
+  where the picture shrinks. cnc-ddraw's own shaders (`inc/openglshader.h`,
+  in the picture's colours): bilinear, Catmull-Rom in 5 taps (its default),
+  Hyllian's lanczos2-sharp and xBR-lv2 (its `f4`, never set there or
+  upstream, is 0 here, as WebGL makes an unset one). The bars beside the
+  picture are black, as both have them. The game's size never follows the window: a window
+  resized scales the same picture (integer: the largest whole multiple that
+  fits, and where not even 1x fits, scaled to fit, as cnc-ddraw's boxing).
+- A menu (Shift+F11, DDrawCompat's `ConfigHotKey` and configuration overlay):
+  the filter and its blur or lobes, the locked mouse's sensitivity
+  (DDrawCompat's `MouseSensitivity`, a setting of later DDrawCompat, not the Steam release's 0.5.4), the stats, full screen, a screenshot
+  (`web/settings.js`, kept in localStorage; an older page's sharp, smooth,
+  crt and nearest become bilinear 0, 100, 0 and point). Stats in a corner (Shift+F12,
+  DDrawCompat's `StatsHotKey`): the page's frame rate, the game's frames a
+  second (its counter at 0xA8ED84), the timer (fine, or coarse and how late),
+  the sound and its underruns, the mouse. A screenshot (PrintScreen,
+  cnc-ddraw's): the frame at the game's size, a PNG downloaded.
+- The mouse, as cnc-ddraw keeps it (`wndproc.c`, `mouse.c`), here and in the
+  native presenter: a click keeps it in the picture (the browser's Pointer
+  Lock; full screen keeps it as it starts; a window in a battle only, below),
+  and that click is not the game's, only the game's cursor goes where it was
+  (beside the picture: to the middle); Ctrl+Tab or right Alt + right Ctrl
+  lets it go (cnc-ddraw's unlock keys; in a window Ctrl+Tab is the
+  browser's), and so do the page's menu and another window; a mouse let go
+  is not the game's, no moves and no clicks. In a window, the keys not
+  locked, Escape is the browser's while it keeps the mouse (it lets the
+  mouse go; Chromium's `exclusive_access_manager.cc` passes the page no key
+  down, only the key up), so a key up of Escape that had no key down, just
+  after the lock went, gives the game its Escape. Where the browser will not
+  keep the mouse (refused, headless Chrome, its second after an Escape) the
+  click that asked goes to the game after all, and the mouse is the game's
+  as it moves until a click gets the lock (`web/input.js`). A window keeps it
+  in a battle only (`presenter.battle()`: the game's own capture of the
+  mouse, `Capture_Mouse()` and `Release_Mouse()`, measured in
+  `spike/input/RESULT.md`): its menus have the mouse as it is, their clicks
+  the game's at once; a battle's menu opening lets it go, the battle coming
+  back asks for it (Resume's click being the gesture the browser wants; asked
+  again a few times, the browser refusing for 1.25 s after an Escape:
+  Chromium's `kEffectiveUserEscapeDuration`), and a battle begun after a long
+  load gets it at its first click.
+- Not taken: activation messages (cnc-ddraw's `noactivateapp`: win32hle never
+  sends a game its deactivation already), single-core affinity (the machine
+  lock runs one guest thread at a time), `WinVersionLie`, `tshack` (surfaces
+  reported as video memory), exclusive full screen, DPI and alt-tab fixes (a
+  real DirectDraw's matters), `PresentDelay` (the page shows the frame the
+  game has when it reads its message queue already).
+
+Checked in Chrome: in a window, the main menu's first click opening Single
+Player with no lock; the lock granted (simulated) as the battle began, let go
+by the browser's Escape with the game's menu (0xB5) open and the page's
+cursor shown, granted again at Resume; the lock refused in a battle, the
+mouse not the game's until a click, that click the game's and from then on
+its moves. Before that: the lock refused (headless), the click that asked
+opening Single Player all the same; the lock granted (simulated: headless Chrome has
+none), that click not the game's and the game's cursor at it, the next one
+opening Single Player, moves while let go not the game's, and in a skirmish
+the browser's Escape (the lock ended, a key up alone) opening the game's menu
+(0xB5). A real lock, and a window's Escape in a real Chrome, not tried (it
+would take this Mac's mouse). Every filter drawn (`work/runs/filters`), and 60 pixels
+of each DDrawCompat filter (point, bilinear 0 and 100, bicubic 0 and 50,
+lanczos 3, spline 2, 3 and 4) against the same formulas computed on the CPU
+from the frame: 1-2/255 apart at most (8-bit rounding); Shift+F11 opening the
+menu, its blur or lobes shown for the filters that have one, Shift+F12's
+stats, a screenshot of 800x600 as a PNG, Ctrl+Tab letting the (simulated)
+locked mouse go, a sensitivity of 200% moving it twice as far (100 CSS px:
+125 game pixels at 0.625).
+
+**The game as shipped, on the page (2026-10-26).** The web has a host of its
+own, `wasi/main.c`, in place of the native one (`src/linux/main.c`), and none
+of the remaster's features: no HD vehicles, Modern controls, mods, F10 menu,
+FPS display, `ra2.ini`, recording, or `--headless` (it meant "no native
+window", which the web never has). The lift's patches still call a host: the
+remaster's features answer as they do switched off (`ra2_vox_hd_on` 0,
+`ra2_modern_controls` 0), and its two fixes stay (the sidebar's rows capped
+past 1440 lines, the line clipper's rounds capped: issue #20). Of the native
+host only `script.c` (the tests' scripted input) and `blowfish.c` (the
+game's cipher) are built. `RA2_FRAME_STATS` still says the frame time. A
+message box's question is answered No, as through `--headless` before.
+Checked: the main menu under Node, the scripted skirmish in Chrome (209 game
+frames each 3.33 s, as before), the cache and store test pages.
+
+**The resolutions: the game's own, a display's list (2026-10-26).** The game
+lists only 640, 800 and 1024 wide in its Options screen unless its INI has
+`[Video] AllowHiResModes=yes` (its code: read at 0x5FA942, the list built
+near 0x56017A, every 16-bit mode from 640x480 to 4096x4096 when on); it
+never writes the key. `wasi/main.c` adds `yes` when the INI has none (a
+player's own value stays), as the native host does. The modes offered are a
+display's, as the Steam release's DDrawCompat passes them on (`native` in
+EA's `DDrawCompat.ini`: every mode of the display): the page writes its
+screen's size, logical and in pixels, into the frames header
+(`presenter.js`; in pixels exact in full screen at any zoom, otherwise at a
+zoom of 100%), and `wasi/screen.c` answers ddraw.c's `hle_dd_modes_hook`
+(win32hle's; unset natively) with ddraw.c's table cut to what fits the screen
+in pixels, the screen's own sizes added, 640x480 and 800x600 always. The
+game's size never follows the window (above). Checked in Chrome on a
+simulated 1470x956 screen at 2x: the INI without the key got it, the game
+logging `AllowHiRes is ON`; its Options screen offered 640x480 to 2560x1600
+less 3440x1440 and wider, plus 1470x956 and 2940x1912. Measured (wasm,
+uncapped, the scripted skirmish): 0.7 ms a frame at 640x480, 1.4 at
+1920x1080, 2.2-2.9 at 2560x1440, 3.4-4.4 at 3840x2160; in Chrome 60 game
+frames a second and 59-60 shown at 640x480, 1920x1080 and 3840x2160 (this
+Mac; slower machines not tried).
