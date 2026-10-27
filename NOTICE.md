@@ -17,7 +17,7 @@ ahead, `datacache.ts`, `io-worker.ts` and `predownload-worker.ts`, in
 https://github.com/sp00nznet/redalert2-recomp at `0a3e5d7`, only what this
 build uses, with this project's changes; taken from upstream since, one at a
 time: pcrecomp `7f217a7` (win32hle repaints the siblings a closed window
-uncovers), 2026-10-28:
+uncovers) and `54cb21f` (name_lift skips macOS's `._*` files), 2026-10-28:
 
 | Here | There |
 |---|---|
