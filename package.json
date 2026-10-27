@@ -1,0 +1,9 @@
+{
+  "name": "redalert2-web",
+  "private": true,
+  "type": "module",
+  "description": "Yuri's Revenge in the browser: the game lifted to C on win32hle, as WebAssembly; its hosts, relay and tests",
+  "devDependencies": {
+    "playwright-core": "1.64.1"
+  }
+}
