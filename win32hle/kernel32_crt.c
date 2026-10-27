@@ -350,12 +350,21 @@ static void k_GetDateFormatA(void) { date_or_time(0); }
 static void k_GetTimeFormatA(void) { date_or_time(1); }
 
 /* --- environment: the host's, filtered to nothing a game would misread --- */
-/* The block the guest is handed (GetEnvironmentStrings), so in its memory. */
+/* The block the guest is handed (GetEnvironmentStrings), so in its memory.
+ * Its PATH is the same on every host unless the host sets hle_guest_env_path
+ * before the guest starts: a game that mixes PATH into an id of its own (Red
+ * Alert 2's session UniqueID, which drops a LAN packet carrying its own as its
+ * echo) sees the same PATH everywhere, as no two Windows machines did. */
 #define ENV_SIZE 4096u
+const char *hle_guest_env_path;
 static char *env_block(void) {
     static char *env;
-    static const char init[] = "PATH=C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS\0WINDIR=C:\\WINDOWS\0\0";
-    if (!env) env = (char *)hle_alloc(ENV_SIZE), memcpy(env, init, sizeof init);
+    if (!env) {
+        const char *path = hle_guest_env_path && strlen(hle_guest_env_path) < 1024 ? hle_guest_env_path : "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS";
+        env = (char *)hle_alloc(ENV_SIZE);
+        int n = snprintf(env, ENV_SIZE, "PATH=%s", path) + 1;
+        memcpy(env + n, "WINDIR=C:\\WINDOWS\0", sizeof "WINDIR=C:\\WINDOWS\0");   /* and the block's closing 0 */
+    }
     return env;
 }
 #define g_env (env_block())
