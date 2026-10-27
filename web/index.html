@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>RA2 web: starting</title>
+<!--
+  The test page: the WASI build in this browser, headless (no picture yet).
+  /web/index.html?arg=--run&...   the host's arguments, in order (wasi/main.c)
+                 &env=K=V                        environment variables (repeatable)
+                 &pool=16                        game-thread workers (the game starts 6 to 7 threads)
+                 &save=NAME&fresh                the save set in OPFS (default ra2yr-test), emptied first
+                 &nocache, &freshcache           the game data not kept in OPFS; what it kept emptied first
+  Every line the game prints goes to the console (tools/chrome.mjs streams it)
+  and the last ones to the page; at the end the title is "EXIT <code>".
+-->
+<style>body { font: 12px ui-monospace, monospace; margin: 8px; } pre { white-space: pre-wrap; }</style>
+<pre id="log"></pre>
+<script type="module">
+import { startProcess } from './process.js';
+
+const q = new URLSearchParams(location.search);
+const args = q.getAll('arg');
+const env = Object.fromEntries(q.getAll('env').map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)]));
+const pre = document.getElementById('log'), shown = [];
+const t0 = performance.now();
+function onLog(s) {
+  console.log(s);
+  shown.push(s); if (shown.length > 200) shown.shift();
+  pre.textContent = shown.join('\n');
+}
+function onExit(code) {
+  console.log(`[page] exit ${code} after ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+  document.title = `EXIT ${code}`;
+}
+try {
+  document.title = 'RA2 web: running';
+  await startProcess({ wasmUrl: '/out/ra2.wasm', args, env, pool: +(q.get('pool') ?? 16), save: q.get('save') ?? 'ra2yr-test', fresh: q.has('fresh'),
+    cache: !q.has('nocache'), freshCache: q.has('freshcache'), onLog, onExit });
+} catch (x) {
+  onLog(`[page] ${x?.stack ?? x}`);
+  document.title = 'EXIT -1';
+}
+</script>

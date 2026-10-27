@@ -1,0 +1,354 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Yuri's Revenge</title>
+<!--
+  The game on a page: the picture on a canvas (presenter.js), the mouse and
+  keys into the game (input.js), the sound (audio.js). It opens on a start
+  panel: Play, and the game data on this browser (predownload.js: how much of
+  it is here, the game's files and the movies apart, its download ahead with its
+  speed and time left, with the movies or not, paused and resumed, deleted). Play pauses a download and the game's
+  end resumes it. Full screen (fullscreen.js; the panel's choice, the bar's
+  button, Alt+Enter): every key the game's, the mouse kept in the picture.
+  In the game, the Steam release's wrappers' keys: Shift+F11 the page's menu
+  (DDrawCompat's: the scaling, the mouse's speed, the stats, a screenshot:
+  settings.js), Shift+F12 the stats (DDrawCompat's), PrintScreen a screenshot,
+  Ctrl+Tab (or right Alt + right Ctrl) lets the mouse go (cnc-ddraw's). The host is the web's own (wasi/main.c:
+  the game as shipped, none of the remaster's features).
+  Online play (online.js): a relay's address and the player's name, on the panel (or &relay=URL&name=NAME):
+  the game then joins the relay's virtual LAN (wasi/net.c, ../host/core/net.mjs, relay/main.go), and its own
+  Network lobby is that LAN's. One page of a browser online at a time (a Web Lock), and only with all the game
+  data but the movies in this browser (online.js onlineData; the panel says what is missing).
+  /web/play.html?arg=...&arg=...   other host arguments, in order (as natively); with them, or with
+                &go                the game at once, no panel (the tests); &panel: the panel all the same
+                &download          the download ahead started at once (&movies: with them); with the game at
+                                   once, the download first, then the game
+                &env=K=V           environment variables (repeatable)
+                &pool=16           game-thread workers
+                &save=NAME         the save set: its folder in this site's OPFS (default ra2yr)
+                &fresh             that folder emptied first
+                &nocache           the game data not kept in OPFS (it is, as it is read: data-cache.js)
+                &freshcache        what of it OPFS kept emptied first
+  The sound starts at the first click or key (a browser's rule).
+  window.ra2web: { presenter, input, audio, log, predownload, screen, memory } for the tests
+  (tools/chrome.mjs clicks at game pixels through presenter.canvasAt).
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ccc; font: 12px ui-monospace, monospace; overflow: hidden; }
+  #screen { position: absolute; inset: 0 0 22px 0; width: 100%; height: calc(100% - 22px); outline: none; display: block; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; line-height: 22px; padding: 0 8px; background: #111;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  #log { position: absolute; left: 0; right: 0; bottom: 22px; max-height: 40%; overflow: auto; margin: 0; padding: 6px 8px;
+         background: rgba(0,0,0,.85); display: none; white-space: pre-wrap; z-index: 2; }
+  #start { position: absolute; inset: 0 0 22px 0; display: flex; align-items: center; justify-content: center; z-index: 1;
+           background: radial-gradient(ellipse at center, #1b1f2a 0%, #000 75%);
+           font: 14px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #d8dbe2; }
+  #start[hidden] { display: none; }
+  .card { width: min(560px, 92vw); padding: 28px 30px; background: rgba(20, 23, 31, .92); border: 1px solid #2c3242; border-radius: 10px;
+          box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+  h1 { margin: 0 0 18px; font-size: 26px; font-weight: 600; letter-spacing: .04em; color: #f0f2f6; }
+  button { font: inherit; padding: 7px 16px; border-radius: 6px; border: 1px solid #3a4258; background: #252b3a; color: #e6e8ee; cursor: pointer; }
+  button:hover:not(:disabled) { background: #2f3749; }
+  button:disabled { opacity: .5; cursor: default; }
+  #play { font-size: 17px; padding: 10px 34px; background: #2f5bd3; border-color: #3d6ae6; color: #fff; }
+  #play:hover:not(:disabled) { background: #3a67e0; }
+  .hint { color: #8b92a5; font-size: 12.5px; margin-top: 8px; min-height: 1em; }
+  section { margin-top: 26px; padding-top: 18px; border-top: 1px solid #2c3242; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; }
+  .head b { font-weight: 600; color: #f0f2f6; }
+  .part { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; color: #aeb4c4; }
+  .sum { font-variant-numeric: tabular-nums; }
+  .meter { height: 10px; margin: 5px 0 0; background: #11141b; border: 1px solid #2c3242; border-radius: 5px; overflow: hidden; }
+  .fill { height: 100%; width: 0; background: linear-gradient(90deg, #2f5bd3, #4c8af0); transition: width .25s; }
+  .fill.done { background: linear-gradient(90deg, #2a9d61, #3fbf7c); }
+  #line { min-height: 1.4em; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  #line.warn { color: #e5b55a; } #line.bad { color: #ef7d6d; }
+  .hint.warn { color: #e5b55a; }
+  #file { color: #6f768a; font-size: 12px; min-height: 1.3em; font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-top: 12px; }
+  label { color: #aeb4c4; cursor: pointer; user-select: none; }
+  #del { margin-left: auto; background: transparent; border-color: #3a4258; color: #aeb4c4; }
+  .full { margin-top: 12px; }
+  input.text { font: inherit; padding: 6px 9px; border-radius: 6px; border: 1px solid #3a4258; background: #11141b; color: #e6e8ee; flex: 1; min-width: 0; }
+  input.short { flex: 0 0 170px; }
+  #namehint { color: #e5b55a; margin: 0; }
+  #fs { position: absolute; right: 0; bottom: 0; height: 22px; z-index: 4; border: 0; border-left: 1px solid #2a2a2a; border-radius: 0;
+        background: #1a1a1a; color: #bbb; font: 12px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; padding: 0 12px; }
+</style>
+<canvas id="screen" tabindex="0"></canvas>
+<div id="start" hidden>
+  <div class="card">
+    <h1 id="title">尤里的复仇</h1>
+    <button id="play">开始游戏</button>
+    <div class="full"><label><input type="checkbox" id="full"> 全屏游戏（推荐）</label></div>
+    <div class="hint">全屏时鼠标锁在画面里，贴边就能卷动地图；Ctrl+数字、Esc 这些键都交给游戏。长按 Esc 退出全屏，Alt+Enter 切换。</div>
+    <div class="hint" id="playhint"></div>
+    <section>
+      <div class="head"><b>本机上的游戏数据</b></div>
+      <div class="part"><span>游戏文件</span><span class="sum" id="sumgame"></span></div>
+      <div class="meter"><div class="fill" id="fillgame"></div></div>
+      <div class="part"><span>过场动画</span><span class="sum" id="summovies"></span></div>
+      <div class="meter"><div class="fill" id="fillmovies"></div></div>
+      <div id="line"></div>
+      <div id="file"></div>
+      <div class="row">
+        <button id="get">下载全部数据</button>
+        <label><input type="checkbox" id="movies"> <span id="movieslabel">连同过场动画</span></label>
+        <button id="del">删除本机数据</button>
+      </div>
+      <div class="hint" id="store"></div>
+    </section>
+    <section>
+      <div class="head"><b>联机</b></div>
+      <div class="row"><label for="relay">服务器</label><input id="relay" class="text" placeholder="wss://服务器地址:端口/net（空着就不联机）" spellcheck="false"></div>
+      <div class="row"><label for="pname">玩家名</label><input id="pname" class="text short" maxlength="16" spellcheck="false"><span class="hint" id="namehint"></span></div>
+      <div class="hint warn" id="onlinehint"></div>
+      <div class="hint">填好服务器再开始游戏，进游戏里的"网路"：连着同一个服务器的玩家都在一个局域网大厅里。名字用英文字母、数字、空格、_ 或 -，最多 16 个，不能和别人重名。同一个浏览器只能开一个页面联机。</div>
+    </section>
+  </div>
+</div>
+<pre id="log"></pre>
+<div id="bar" title="click: the log">starting</div>
+<button id="fs" title="Alt+Enter">全屏</button>
+<script type="module">
+import { startProcess } from './process.js';
+import { startPresenter } from './presenter.js';
+import { startInput } from './input.js';
+import { startAudio } from './audio.js';
+import { predownload } from './predownload.js';
+import { cacheBusy, deleteCache } from './data-cache.js';
+import { manifestFiles, movieFiles } from './game-files.js';
+import { gameScreen } from './fullscreen.js';
+import { loadSettings, startMenu } from './settings.js';
+import { NAME_RE, claimOnline, netText, onlineData, onlineSettings, saveOnline, startNet } from './online.js';
+
+const q = new URLSearchParams(location.search);
+const extra = q.getAll('arg');
+const args = extra.length ? extra : ['--run', '--debuglog', '--exe', '/game/gamemd.exe', '--game', '/game'];
+const env = Object.fromEntries(q.getAll('env').map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)]));
+const $ = (id) => document.getElementById(id);
+const canvas = $('screen'), bar = $('bar'), logEl = $('log');
+const lines = [];
+let last = 'starting';
+bar.onclick = () => { logEl.style.display = logEl.style.display === 'block' ? 'none' : 'block'; logEl.scrollTop = logEl.scrollHeight; };
+function log(s) {
+  console.log(s);
+  lines.push(s); if (lines.length > 500) lines.shift();
+  last = s;
+  if (logEl.style.display === 'block') { logEl.textContent = lines.join('\n'); logEl.scrollTop = logEl.scrollHeight; }
+}
+const ra2web = (window.ra2web = { log: lines });
+const screen = (ra2web.screen = gameScreen({ canvas, log }));
+$('fs').onclick = () => { screen.toggle(); canvas.focus(); };
+document.addEventListener('fullscreenchange', () => { $('fs').textContent = screen.on() ? '退出全屏' : '全屏'; });
+let regs = {}, proc = null;
+// online play: the relay and the name (the panel's, or the page's parameters), decided as the game starts
+const online = onlineSettings();
+env.RA2WEB_MACHINE ??= online.client;          // this browser's own PATH for the game (wasi/main.c machine_path)
+if (q.has('relay')) online.relay = q.get('relay');
+if (q.has('name')) online.name = q.get('name');
+let netStatus = null, netWorker = null, onlineOn = false;
+async function goOnline() {
+  if (!online.relay) return;
+  if (!NAME_RE.test(online.name)) { netStatus = { state: 'refused', why: 'bad' }; return; }
+  const data = await onlineData().catch(() => ({ ready: false, missing: 0 }));   // all the game data but the movies, here first
+  if (!data.ready) { netStatus = { state: 'nodata', missing: data.missing }; log(`[net] ${netText(netStatus)}`); return; }
+  if (!(await claimOnline())) { netStatus = { state: 'busy' }; log(`[net] ${netText(netStatus)}`); return; }
+  onlineOn = true;
+  Object.assign(env, { RA2WEB_NET: '1', RA2WEB_NAME: online.name });
+}
+const settings = (ra2web.settings = loadSettings());
+const menu = (ra2web.menu = startMenu({ settings, screen, log, presenter: () => ra2web.presenter, audio: () => ra2web.audio,
+  memory: () => ra2web.memory, ctl: () => proc?.ctl }));
+// the page's own keys, before the game's (input.js): true, and the game never sees it
+let rightAlt = false;
+function onKey(e, down) {
+  if (e.code === 'AltRight') rightAlt = down;
+  if (menu.isOpen()) {                     // the menu's: its keys, and releases still reach the game
+    if (down && (e.code === 'Escape' || (e.code === 'F11' && e.shiftKey))) menu.close();
+    return down;
+  }
+  const unlock = () => { if (document.pointerLockElement) document.exitPointerLock(); };
+  if (e.code === 'Enter' && e.altKey) { if (down && !e.repeat) screen.toggle(); return true; }
+  if (e.code === 'F11' && e.shiftKey) { if (down && !e.repeat) menu.toggle(); return true; }
+  if (e.code === 'F12' && e.shiftKey) { if (down && !e.repeat) menu.toggleStats(); return true; }
+  if (e.code === 'PrintScreen') { if (!down) menu.screenshot(); return true; }       // Windows gives it a key up only
+  if (e.code === 'Tab' && e.ctrlKey) { if (down) unlock(); return true; }
+  if (e.code === 'ControlRight' && rightAlt) { if (down) unlock(); return true; }
+  return false;
+}
+function onRegister(kind, ptr, size, memory, info) {
+  regs[kind] = ptr;
+  if (kind === 4 && onlineOn && !netWorker)               // the game's network mailbox: join the relay's LAN
+    netWorker = startNet({ memory, ptr, url: online.relay, hello: { build: info.build, name: online.name, client: online.client },
+      onStatus: (s) => { netStatus = s; if (s.state !== 'joined' || s.ip) log(`[net] ${netText(s)}`); }, log });
+  ra2web.memory = memory;
+  if (kind === 1) ra2web.presenter = startPresenter(canvas, memory, ptr, { scale: settings.scale, param: settings.params[settings.scale] });
+  const opts = { onKey, sensitivity: () => settings.sensitivity / 100 };
+  if (kind === 2 && ra2web.presenter) ra2web.input = startInput(canvas, memory, ptr, ra2web.presenter, opts);
+  if (kind === 1 && regs[2] !== undefined && !ra2web.input) ra2web.input = startInput(canvas, memory, regs[2], ra2web.presenter, opts);
+  if (kind === 3) ra2web.audio = startAudio(memory, ptr, { log });
+}
+setInterval(() => {
+  const p = ra2web.presenter, [w, h] = p ? p.size() : [0, 0];
+  const sound = ra2web.audio && ra2web.audio.state() !== 'running' ? ' | click for sound' : '';
+  bar.textContent = `${netStatus ? `${netText(netStatus)} | ` : ''}${p ? `${w}x${h}` : 'no picture yet'}${sound} | ${last}`;   // the frame rate: the stats (Shift+F12)
+  if (logEl.style.display === 'block') logEl.textContent = lines.join('\n');
+}, 500);
+
+// ---- the game ----
+async function play() {
+  try {
+    await goOnline();
+    navigator.storage?.persist?.().then(async (kept) => {
+      const est = await navigator.storage.estimate?.();
+      log(`[save] persistent storage ${kept ? 'granted' : 'not granted (the browser may clear it when the disk is short)'}; this site uses ${((est?.usage ?? 0) / 1048576).toFixed(1)} MB`);
+    });
+    proc = await startProcess({ wasmUrl: '/out/ra2.wasm', args, env, pool: +(q.get('pool') ?? 16), save: q.get('save') ?? 'ra2yr', fresh: q.has('fresh'),
+      cache: !q.has('nocache'), freshCache: q.has('freshcache'), onLog: log, onRegister,
+      onExit: (code) => { log(`[page] exit ${code}`); document.title = `EXIT ${code}`; ended(code); } });
+    canvas.focus();
+  } catch (x) {
+    log(`[page] ${x?.stack ?? x}`);
+    document.title = 'EXIT -1';
+    ended(-1);
+  }
+}
+
+// ---- the start panel: the game data on this browser ----
+const size = (n) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(n >= 10 * 1024 ** 3 ? 0 : 1)} GB` : `${Math.round(n / 1048576)} MB`);
+const speed = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB/s` : `${Math.round(n / 1024)} KB/s`);
+function left(s) {
+  if (s < 60) return `${Math.max(1, Math.round(s))} 秒`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分 ${Math.round(s % 60)} 秒`;
+  return `${Math.floor(s / 3600)} 小时 ${Math.round((s % 3600) / 60)} 分`;
+}
+let moviesSize = 0, resume = false, over = false;
+const pd = (ra2web.predownload = predownload({ log, onUpdate: render }));
+// what this browser keeps of the game's files and of the movies, apart (whether the download takes the movies or not)
+function part(id, have, total) {
+  const pct = total ? have / total : 0;
+  $(`sum${id}`).textContent = total ? `${size(have)} / ${size(total)}（${Math.floor(pct * 100)}%）` : '';
+  $(`fill${id}`).style.width = `${(pct * 100).toFixed(1)}%`;
+  $(`fill${id}`).classList.toggle('done', total > 0 && have >= total);
+}
+function render(s) {
+  part('game', s.gameHave, s.gameTotal);
+  part('movies', s.movieHave, s.movieTotal);
+  const line = $('line'), get = $('get');
+  line.className = '';
+  let text = '', file = '';
+  const waiting = s.waiting && Date.now() - s.waiting.at < 30000;
+  switch (s.phase) {
+    case 'running':
+      if (waiting) { text = `等待服务器（${s.waiting.why}），第 ${s.waiting.tries} 次重试，${s.waiting.ms / 1000} 秒后再试`; line.className = 'warn'; }
+      else if (s.still >= 30) { text = `下载 ${s.still} 秒没有进展：点“暂停”，再点“继续下载”重试`; line.className = 'warn'; }
+      else text = s.rate > 0 ? `下载中 ${speed(s.rate)} · 还要约 ${left(s.eta)}` : '下载中…';
+      file = s.file; break;
+    case 'stopping': text = '正在暂停…'; break;
+    case 'done': text = `${s.movieHave >= s.movieTotal ? '全部在本机了，游戏读取数据不必再等网络' : '游戏文件全部在本机了，游戏读取数据不必再等网络（过场动画播放时从服务器读）'}` +
+      `${s.got ? ` · 这次下载 ${size(s.got)}，经网络传输 ${size(s.wire)}` : ''}`; break;
+    case 'busy': text = '这个网站的另一个标签页正在用游戏数据（在玩或在下载），关掉它再刷新'; line.className = 'warn'; break;
+    case 'error': text = `下载停止了：${s.msg}`; line.className = 'bad'; break;
+    default: text = s.have ? '已下载一部分，可以接着下载' : '游戏边玩边从服务器读数据，读过的会存在本机。提前下载全部数据，游戏就不必等网络';
+  }
+  line.textContent = text;
+  $('file').textContent = file;
+  get.disabled = s.phase === 'stopping' || s.phase === 'done' || s.phase === 'busy';
+  get.textContent = s.phase === 'running' ? '暂停' : s.phase === 'stopping' ? '正在暂停' : s.phase === 'done' ? '已全部下载'
+    : s.have ? `继续下载（还剩 ${size(s.total - s.have)}）` : `下载全部数据（${size(s.total)}）`;
+  $('movies').disabled = s.phase === 'running' || s.phase === 'stopping';
+  $('playhint').textContent = over ? '' : s.phase === 'running' ? '开始游戏会先暂停下载，游戏结束后自动接着下载' : '';
+  $('playhint').classList.remove('warn');
+  // not while this page's download runs: what it has is in its own progress, and the hint is told again as it ends
+  if (!pd.running() && (s.phase !== hintPhase || Date.now() - hintAt > 2000)) { hintPhase = s.phase; hintAt = Date.now(); onlineHint(); }
+}
+async function storeLine() {
+  const kept = await navigator.storage?.persisted?.(), est = await navigator.storage?.estimate?.();
+  $('store').textContent = `${kept ? '浏览器会一直保留这些数据' : '磁盘紧张时浏览器可能清掉这些数据（存档也在其中）'}` +
+    `${est?.quota ? ` · 本站还能用约 ${size(Math.max(0, est.quota - (est.usage ?? 0)))}` : ''}`;
+}
+const withMovies = () => $('movies').checked;
+function download() {
+  navigator.storage?.persist?.().then(storeLine).catch(() => {});
+  pd.start({ movies: withMovies() });
+}
+$('get').onclick = () => (pd.running() ? pd.stop().then(storeLine) : download());
+$('movies').onchange = () => { localStorage.setItem('ra2web.movies', withMovies() ? '1' : '0'); pd.refresh({ movies: withMovies() }); };
+$('del').onclick = async () => {
+  if (!confirm('删除这个浏览器里保存的游戏数据？存档不受影响；之后游戏会重新从服务器读取。')) return;
+  await pd.stop();
+  if (!(await deleteCache())) alert('游戏数据正在被使用（在玩或在下载），没有删除。');
+  await pd.refresh({ movies: withMovies() });
+  storeLine();
+};
+$('full').onchange = () => localStorage.setItem('ra2web.full', $('full').checked ? '1' : '0');
+// online play needs the game data here first (online.js onlineData): the hint under the relay's
+// address, and the play button holds until then (or until the address is cleared)
+let onlineReady = false, manifest = null, hintAt = 0, hintPhase = '';
+async function onlineHint() {
+  try {
+    manifest ??= await manifestFiles();
+    const d = await onlineData(manifest);
+    onlineReady = d.ready;
+    $('onlinehint').textContent = online.relay && !d.ready ? `联机前要先下载完游戏数据（不含过场动画），还差 ${size(d.missing)}：点上面的“下载全部数据”` : '';
+  } catch { onlineReady = false; }
+}
+const onlineInput = () => {
+  online.relay = $('relay').value.trim(); online.name = $('pname').value.trim();
+  $('namehint').textContent = online.relay && !NAME_RE.test(online.name) ? '名字不合要求' : '';
+  saveOnline(online);
+  onlineHint();
+};
+$('relay').oninput = $('pname').oninput = onlineInput;
+$('play').onclick = async () => {
+  if (over) { location.reload(); return; }
+  if (online.relay && !onlineReady) {
+    $('playhint').textContent = '要联机，先下载完游戏数据（不含过场动画）；只想单机玩，把联机的服务器地址清空';
+    $('playhint').classList.add('warn');
+    return;
+  }
+  if ($('full').checked) screen.enter();        // within the click: a browser allows it no later
+  $('play').disabled = true;
+  resume = pd.running();
+  await pd.stop();
+  $('start').hidden = true;
+  play();
+};
+function ended(code) {
+  if (immediate) return;
+  over = true;
+  $('title').textContent = `游戏已结束（退出码 ${code}）`;
+  $('play').textContent = '重新开始';
+  $('play').disabled = false;
+  $('start').hidden = false;
+  if (resume) download(); else pd.refresh({ movies: withMovies() }).then(storeLine);
+}
+
+const immediate = (extra.length > 0 || q.has('go')) && !q.has('panel');
+// &download at once (the tests): the game data here first (&movies: with them), as online play needs
+// (online.js onlineData); then the game, once the download has let the cache go
+async function downloadFirst() {
+  await pd.refresh({ movies: q.has('movies') });
+  if (pd.state().phase !== 'done') pd.start({ movies: q.has('movies') });
+  const settled = () => !pd.running() && ['done', 'error', 'stopped', 'busy', 'idle'].includes(pd.state().phase);
+  for (let n = 1; !settled() || (await cacheBusy()); n++) {
+    await new Promise((r) => setTimeout(r, 200));
+    if (n % 50 === 0) { const s = pd.state(); log(`[predownload] ${s.phase}: ${Math.round(s.have / 1048576)} of ${Math.round(s.total / 1048576)} MB${s.file ? `, ${s.file}` : ''}; the worker last heard ${(pd.silentFor() / 1000).toFixed(1)} s ago`); }
+  }
+}
+if (immediate) { if (q.has('download')) await downloadFirst(); play(); }
+else {
+  $('start').hidden = false;
+  $('movies').checked = q.has('movies') || localStorage.getItem('ra2web.movies') === '1';
+  $('full').checked = localStorage.getItem('ra2web.full') !== '0';
+  $('relay').value = online.relay; $('pname').value = online.name;
+  render(pd.state());
+  try {
+    moviesSize = movieFiles(await manifestFiles()).reduce((a, f) => a + f.size, 0);
+    $('movieslabel').textContent = `连同过场动画（${size(moviesSize)}）`;
+    await pd.refresh({ movies: withMovies() });
+    storeLine();
+    if (q.has('download')) download();
+  } catch (x) { log(`[page] ${x?.stack ?? x}`); $('line').textContent = `读不到服务器上的游戏数据清单：${x?.message ?? x}`; $('line').className = 'bad'; }
+}
+</script>
