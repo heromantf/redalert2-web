@@ -540,12 +540,21 @@ static void k_FindClose(void) { RET(hle_handle_close(A32(0)) ? 1u : 0u, 1); }
 
 /* ---- disks and volumes ---- */
 static void k_GetDiskFreeSpaceA(void) {                  /* (root, &spc, &bps, &free, &total) */
-    /* At most 2 GB free: a 1990s game multiplies these in 32 bits. */
+    /* At most 2 GB free: a 1990s game multiplies these in 32 bits (as Windows
+     * answers it: Windows 95 capped it so, EmulateGetDiskFreeSpace still does). */
     if (A32(1)) MEM32(A32(1)) = 8;
     if (A32(2)) MEM32(A32(2)) = 512;
     if (A32(3)) MEM32(A32(3)) = 0x7FFFFu;
     if (A32(4)) MEM32(A32(4)) = 0xFFFFFu;
     RET(1, 5);
+}
+static void put_u64(uint32_t va, uint64_t v) { if (va) MEM32(va) = (uint32_t)v, MEM32(va + 4) = (uint32_t)(v >> 32); }
+static void k_GetDiskFreeSpaceExA(void) {                /* (root, &freeToCaller, &total, &totalFree): ULARGE_INTEGERs */
+    /* GetDiskFreeSpaceA's disk, 2047 MB free of 4 GB: under 2 GB, so a game
+     * that reads the low half as signed (Red Alert 2 does) reads it right. */
+    uint64_t free_bytes = 0x7FFFFull * 8 * 512, total = 0xFFFFFull * 8 * 512;
+    put_u64(A32(1), free_bytes), put_u64(A32(2), total), put_u64(A32(3), free_bytes);
+    RET(1, 4);
 }
 static void k_GetVolumeInformationA(void) {              /* (root, name, nameN, &serial, &maxComp, &flags, fs, fsN) */
     char *name = ASTR(1), *fs = ASTR(6);
@@ -779,6 +788,7 @@ const win32hle_shim win32hle_kernel32_ext[] = {
     { "FindNextFileA",              k_FindNextFileA },
     { "FindClose",                  k_FindClose },
     { "GetDiskFreeSpaceA",          k_GetDiskFreeSpaceA },
+    { "GetDiskFreeSpaceExA",        k_GetDiskFreeSpaceExA },
     { "GetVolumeInformationA",      k_GetVolumeInformationA },
     { "GetDriveTypeA",              k_GetDriveTypeA },
     { "GetSystemTime",              k_GetSystemTime },
