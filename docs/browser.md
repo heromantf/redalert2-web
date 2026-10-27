@@ -407,3 +407,21 @@ None touches the game's state, so none can unsync a network game.
   every height under 601 or over 767 lay out as before (the same numbers).
   Checked in Chrome at 1280x720, the allied campaign's first mission: the
   noise before, the shell centred after.
+
+**A window gone uncovers its siblings (2026-10-28).** win32hle repainted the
+parent where a window had been, and the parent's children there only if it did
+not clip them (WS_CLIPCHILDREN); the game's main window clips them, so a
+dialog closed over another, a sibling under the same main window, left the
+other unpainted, its last picture on screen. Windows repaints whatever is
+uncovered, whatever the parent's style (that only keeps the parent's own
+painting off its children). pcrecomp had fixed it upstream the day before
+(`7f217a7`: the siblings below the window, higher in z, repainted where it
+was; found with the Options screen left blank after its box to keep a new
+resolution), taken here as it is (`uncover`, `win32hle/user32.c`). It holds
+here because the menu is below the message box in win32hle's z-order too (a
+log of `uncover`: the box at z 37, the menu, 1280x720, at 38). Seen with the
+in-game Delete Game at 1280x720: Yes or No asked, then Esc or 否, and the
+screen kept the message box (its checksum the same for as long as it was left:
+600 to 1,100 frames) though the game went on (Back and Resume Mission, clicked
+blind, worked); the build before these fixes did the same. Now the list of
+saves is drawn again at once, after Esc as after 否.

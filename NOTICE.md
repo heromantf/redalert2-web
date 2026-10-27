@@ -15,7 +15,9 @@ ahead, `datacache.ts`, `io-worker.ts` and `predownload-worker.ts`, in
 **pcrecomp and redalert2-recomp** (MIT; copyright 2026 sp00nz): copied in
 (2026-10-27) from https://github.com/sp00nznet/pcrecomp at `a72bdcf` and
 https://github.com/sp00nznet/redalert2-recomp at `0a3e5d7`, only what this
-build uses, with this project's changes:
+build uses, with this project's changes; taken from upstream since, one at a
+time: pcrecomp `7f217a7` (win32hle repaints the siblings a closed window
+uncovers), 2026-10-28:
 
 | Here | There |
 |---|---|
