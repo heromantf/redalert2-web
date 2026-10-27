@@ -1,0 +1,762 @@
+#!/usr/bin/env python3
+"""Red Alert 2: Yuri's Revenge lift driver: work/functions.json -> src/recomp/gen/.
+
+Drives pcrecomp's shared `tools/lift/generate.py` + `lift32`, the same shape
+as The Movies' and Force Commander's run_lift.py (docs/architecture.md):
+
+* **Closure-limited lifting** (`generate.closure`). Lift the call-graph closure
+  from the OEP and give every other catalogued function a stub that aborts
+  naming itself, so a run says exactly what to lift next. Bring-up uses --all
+  (gamemd.exe is ~1M instructions, which compiles in minutes); the closure is
+  there for bisecting a bad lift.
+* **Extents by walking the branches** (`generate.true_extent`), capped by
+  reach rather than the catalog's clamp; its docstring has why.
+
+Every vtable slot RTTI names is injected as an entry (work/rtti_seeds.json):
+MSVC's vtordisp adjustor thunks are reachable only through a vtable, so no
+disassembler pass names them, and an unresolved slot answers eax = 0.
+
+    py -3 run_lift.py                      # OEP closure, 3000 functions
+    py -3 run_lift.py --max 20000
+    py -3 run_lift.py --roots 0x007CD80F,0x004A1C30
+    py -3 run_lift.py --virtual --max 60000   # plus every vtable method
+    py -3 run_lift.py --all
+"""
+import argparse
+import hashlib
+import json
+import os
+import sys
+import time
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# PCRECOMP picks another toolkit checkout, the same knob CMakeLists.txt has:
+# the lifter and the runtime header must come from the same tree.
+# Else ../pcrecomp, or ../tools where older setups put it.
+_KIT = os.path.join(_HERE, '..', 'pcrecomp')
+if not os.path.isdir(_KIT) and os.path.isdir(os.path.join(_HERE, '..', 'tools', 'runtime')):
+    _KIT = os.path.join(_HERE, '..', 'tools')
+_TOOLS = os.path.join(os.environ.get('PCRECOMP', _KIT), 'tools')
+sys.path.insert(0, os.path.join(_TOOLS, 'lift'))
+sys.path.insert(0, os.path.join(_TOOLS, 'pe'))
+
+from capstone import Cs, CS_ARCH_X86, CS_MODE_32          # noqa: E402
+from generate import (EXTENT_REACH, closure, find_splits, true_extent,  # noqa: E402
+                      linear_disassemble_function, lift_function_linear, write_chunk)
+from lift32 import Lifter                                  # noqa: E402
+from pe_analyze import analyze_pe, build_iat_map           # noqa: E402
+
+EXE = os.path.join(_HERE, 'game', 'gamemd.exe')
+CATALOG = os.path.join(_HERE, 'work', 'functions.json')
+SEEDS = os.path.join(_HERE, 'work', 'rtti_seeds.json')
+OUT = os.path.join(_HERE, 'src', 'recomp', 'gen')
+STATS = os.path.join(_HERE, 'work', 'lift_stats.json')
+
+# Entries the catalog does not find, so a clean checkout lifts them too
+# (docs/bringup.md 1 and 11). The CRT's static constructors are reachable only
+# through the _initterm table; two window procedures are named only by a
+# `mov reg, imm` behind a jump table. An unresolved ICALL answers eax = 0 and
+# carries on, so a missing one shows up far from its cause.
+RUN_SEEDS = [
+    # static constructors
+    0x0040FF90, 0x00410010, 0x0045B110, 0x004F4100, 0x005394C0, 0x0055F760,
+    0x006A4AF0, 0x006E88B0, 0x006F2A50, 0x0071B740, 0x00747090, 0x0076F700,
+    0x00777380,
+    # window procedures (skirmish setup and its sub-dialogs)
+    0x006163A0, 0x00618D40,
+]
+
+# Functions whose body is the host's instead of the lift: the host defines
+# ra2_hook_<name>(void) and it runs like an import shim (arguments from
+# g_esp, pops its own return address). src/runtime/host.c.
+HOOKS = {
+    # The debug printf. Compiled out of the retail build (a bare `ret`), so
+    # the host gives it a body: --debuglog prints the game's own log, which
+    # says what init is doing at a fraction of --argtrace's cost.
+    0x004068E0: 'debuglog',
+}
+
+# ---- remaster patches: C emitted after one instruction ---------------------
+# The lift stays faithful; a patch is a line of C added after an instruction
+# the game repo names, for a fix the original game cannot have. The --original
+# oracle runs the shipping code unpatched, so it remains the reference.
+
+SIDEBAR_ROWS_MAX = 30
+
+
+def sidebar_rows_patches(code, cs, lo=0x006A5000, hi=0x006AD000, globals_=(0x00886F9C, 0x00B0B4F8)):
+    """The sidebar's cameo rows, capped at 30 so 4K fits its button array.
+
+    The sidebar keeps its cameo buttons in a static array at 0x00B07E80: 240
+    buttons, four tabs of 60 (0x006A4DC0 builds them; index = tab * 60 + i).
+    Its height says how many rows of two to lay out, (height - 26 - top) / 50,
+    and at 2160 lines that is about 41 rows: 82 buttons, past the tab's 60 and
+    at the last tab past the array (docs/hires.md). Every place that computes
+    the row count divides by 50 the same way -- imul by 0x51EB851F, sar 4, then
+    `add r, (r >> 31)` to round toward zero -- so each is found by that shape,
+    in the sidebar code that reads the sidebar's height (0x00886F9C) or its top
+    (0x00B0B4F8), and the result register is capped right after the add. Up to
+    1440 lines nothing changes (27 rows or fewer).
+    """
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    magic = b'\xb8\x1f\x85\xeb\x51'                      # mov eax, 0x51EB851F
+    refs = tuple(g.to_bytes(4, 'little') for g in globals_)   # its height, its top
+    out, i = {}, code.find(magic)
+    while i != -1:
+        va = cs + i
+        if lo <= va < hi and any(r in code[max(0, i - 0x30):i] for r in refs):
+            shr = None
+            for ins in md.disasm(code[i:i + 0x30], va):
+                if ins.mnemonic == 'shr' and ins.op_str.endswith(', 0x1f'):
+                    shr = ins.op_str.split(',')[0]
+                elif shr and ins.mnemonic == 'add' and ins.op_str.split(', ')[1] == shr:
+                    reg = ins.op_str.split(',')[0]
+                    out[ins.address] = ('if ((int32_t)%s > %d) %s = %d; /* remaster: sidebar rows, '
+                                        'run_lift.py sidebar_rows_patches */' % (reg, SIDEBAR_ROWS_MAX, reg,
+                                                                                 SIDEBAR_ROWS_MAX))
+                    break
+        i = code.find(magic, i + 1)
+    return out
+
+
+# HD voxels (docs/voxels.md). The finish stage of a unit's render, 0x00754510,
+# turns its depth-sorted section records into pixels in the 256x256 buffer.
+# Run three more times with each span's start moved half a pixel, and the four
+# images interleave into one at twice the resolution: each pass is a complete,
+# hole-free render, so the result is a true 2x sampling of the model. The
+# rasterizers walk 8.8 fixed point in a 256-wide buffer, which a 2x projection
+# would overflow; half-pixel starts stay inside it. Gated at run time by the
+# host (src/runtime/hdvox.c): off, nothing here does anything.
+def _hd_passes(arg):
+    """C for the three extra runs of 0x00754510, ecx = esp + arg each time."""
+    return ('{ extern int ra2_vox_hd_begin(uint32_t); extern void ra2_vox_hd_pass(int); '
+            'extern uint32_t ra2_vox_hd_end(void); extern int ra2_vox_hd_passes; '
+            'if (ra2_vox_hd_begin(eax)) { for (int _k = 1; _k <= ra2_vox_hd_passes; _k++) { ra2_vox_hd_pass(_k); '
+            'ecx = esp + 0x%X; RECOMP_CALL(sub_00754510); } eax = ra2_vox_hd_end(); } } '
+            '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */' % arg)
+
+
+def _hd_passes_7542f0():
+    """C for the three extra runs of 0x007542F0, the finish stage voxel
+    animations and debris use: ecx = esp+0x44 (its rect), edx = esp+0x20, one
+    stack argument esp+0x1C (it returns with ret 4). Its outputs, esp+0x1C to
+    esp+0x5C, are put back afterwards."""
+    return ('{ extern int ra2_vox_hd_begin_at(uint32_t, uint32_t); extern void ra2_vox_hd_pass(int); '
+            'extern uint32_t ra2_vox_hd_end(void); extern int ra2_vox_hd_passes; uint32_t _eax = eax; '
+            'if (ra2_vox_hd_begin_at(esp + 0x1C, 0x40)) { for (int _k = 1; _k <= ra2_vox_hd_passes; _k++) { ra2_vox_hd_pass(_k); '
+            'ecx = esp + 0x44; edx = esp + 0x20; esp -= 4; MEM32(esp) = esp + 4 + 0x1C; '
+            'RECOMP_CALL(sub_007542F0); } ra2_vox_hd_end(); } eax = _eax; } '
+            '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */')
+
+
+HD_VOXEL_PATCHES = {
+    # 0x00756590: the span record handed to the rasterizer is at esp+0x20; its
+    # starts, x at +0x18 and y at +0x1A, are 8.8 fixed point.
+    0x0075683E: ('{ extern int16_t ra2_vox_dx, ra2_vox_dy; '
+                 'MEM16(eax + 0x18) += ra2_vox_dx; MEM16(eax + 0x1A) += ra2_vox_dy; } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    # 0x00706ED0, just after the finish stage returned its rect (eax): the
+    # extra passes, with the same argument (ecx = esp+0x4C). It preserves
+    # ebx/esi/edi/ebp; ecx and edx are dead here.
+    0x00706FEF: _hd_passes(0x4C),
+    # 0x00706ED0 blits the 1x render onto the battlefield with 0x004AF2A0
+    # (ecx the destination surface, edx the palette converter; on the stack
+    # the source surface, its rect, the destination point, ...). Just before
+    # and just after that call the host looks at the destination, to place
+    # the 2x image where the 1x one went.
+    0x00707233: ('{ extern void ra2_vox_hd_blit(uint32_t, uint32_t, uint32_t); ra2_vox_hd_blit(ecx, edx, esp); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    0x00707235: ('{ extern void ra2_vox_hd_blitted(void); ra2_vox_hd_blitted(); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    # 0x004373B0, the surface-to-surface blitter, after its `sub esp, 0x4C`:
+    # its copy into the frame surface ends a frame, and the host publishes
+    # the 2x layer it built during it.
+    0x004373B0: ('{ extern void ra2_vox_frame_blit(uint32_t, uint32_t); ra2_vox_frame_blit(ecx, esp + 0x4C + 4); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    # 0x00706640: no voxel cache while HD voxels are on, so every unit is
+    # rendered (and at 2x) each frame: a cache key of -1 is the path the
+    # rules' DisableVoxelCache already takes.
+    0x007067E4: ('{ extern int ra2_vox_hd_on; if (ra2_vox_hd_on) { eax = 0xFFFFFFFFu; MEM32(esp + 0x5C) = eax; } } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    # 0x0073B140: a unit's finished staging image (body, turret, barrel)
+    # copied onto the battlefield by 0x004373B0: dest rect, staging surface,
+    # source rect on the stack, the destination surface in ecx.
+    0x0073B43F: ('{ extern void ra2_vox_unit_copy(uint32_t, uint32_t); ra2_vox_unit_copy(ecx, esp); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    0x0073B446: ('{ extern void ra2_vox_unit_copied(void); ra2_vox_unit_copied(); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    # Shadows. 0x00707280 renders a unit's shadow: sections through
+    # 0x00753F90, then the same finish stage (0x00754510, ecx = esp+0x28), its
+    # records plotted by 0x00756860, whose start is 8.8 fixed point at
+    # [esp+0x5C] (x) and [esp+0x5E] (y) once both are stored.
+    0x007568F0: ('{ extern int16_t ra2_vox_dx, ra2_vox_dy; '
+                 'MEM16(esp + 0x5C) += ra2_vox_dx; MEM16(esp + 0x5E) += ra2_vox_dy; } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    # 0x00706BD0 draws a shadow from its own cache (a hit through 0x00707480,
+    # a miss renders without blitting and goes back to the cache); key -1
+    # (ebx, [esp+0x58]) renders and blits every time.
+    0x00706C10: ('{ extern int ra2_vox_hd_on; if (ra2_vox_hd_on) { ebx = 0xFFFFFFFFu; MEM32(esp + 0x58) = ebx; } } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    0x00707387: _hd_passes(0x28),
+    # Voxel animations and debris (VoxelAnimClass::Draw_It, 0x00749B70): a
+    # shadow and then the body, each through 0x007542F0 and blitted onto the
+    # battlefield by 0x004AF2A0. Opt-in (RA2_HD_VOXEL_ANIMS=1): no test yet
+    # puts one on screen (docs/voxels.md).
+    0x00749CFA: _hd_passes_7542f0(),
+    0x00749D6D: ('{ extern void ra2_vox_anim_shadow_blit(uint32_t, uint32_t); ra2_vox_anim_shadow_blit(ecx, esp); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    0x00749D6E: ('{ extern void ra2_vox_anim_shadow_blitted(void); ra2_vox_anim_shadow_blitted(); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    0x00749DE6: _hd_passes_7542f0(),
+    0x00749EE2: ('{ extern void ra2_vox_anim_blit(uint32_t, uint32_t, uint32_t); ra2_vox_anim_blit(ecx, edx, esp); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    0x00749EE4: ('{ extern void ra2_vox_anim_blitted(void); ra2_vox_anim_blitted(); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    # ...and blits the shadow with 0x004AF2A0 (the shadow converter in edx).
+    0x00707431: ('{ extern void ra2_vox_shadow_blit(uint32_t, uint32_t); ra2_vox_shadow_blit(ecx, esp); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+    0x00707432: ('{ extern void ra2_vox_shadow_blitted(void); ra2_vox_shadow_blitted(); } '
+                 '/* remaster: HD voxels, run_lift.py HD_VOXEL_PATCHES */'),
+}
+
+
+# The same sites in Red Alert 2 (game.exe), found by their shapes: the same
+# instructions and stack offsets, but for the frame blitter's frame (0x48).
+HD_VOXEL_SITES_GAME = {
+    0x0075683E: 0x00719BEE, 0x00706FEF: 0x006D25E3, 0x00707233: 0x006D27E6, 0x00707235: 0x006D27E8,
+    0x004373B0: 0x00434B40, 0x007067E4: 0x006D1E18, 0x0073B43F: 0x006FF66C, 0x0073B446: 0x006FF670,
+    0x007568F0: 0x00719CA0, 0x00706C10: 0x006D2220, 0x00707387: 0x006D28F9, 0x00707431: 0x006D29A1,
+    0x00707432: 0x006D29A2, 0x00749CFA: 0x0070D14A, 0x00749D6D: 0x0070D1BB, 0x00749D6E: 0x0070D1BC,
+    0x00749DE6: 0x0070D234, 0x00749EE2: 0x0070D32E, 0x00749EE4: 0x0070D330,
+}
+HD_VOXEL_PATCHES_GAME = {
+    HD_VOXEL_SITES_GAME[va]: c.replace('sub_00754510', 'sub_007178E0').replace('sub_007542F0', 'sub_007176C0')
+                              .replace('esp + 0x4C + 4', 'esp + 0x48 + 4')
+    for va, c in HD_VOXEL_PATCHES.items()
+}
+
+
+MODERN_CONTROLS_TARGETS = {
+    'gamemd': {
+        'message': 0x00693107, 'radar': 0x006539D3, 'radar_stack': 0x48,
+        'action': 0x00693271, 'right_up': 0x004AAE6E,
+        'special_state': 0x11A4, 'special_flags': 0x11B0, 'special_sentinel': 0x11B8,
+        'box_clear': 0x004ABCD4, 'object_clear': 0x004ABE4A,
+        'clear': 0x0048DC90, 'clear_skip': 'L_0048DCB1', 'clear_fn': 'sub_0048DC90',
+        'after_left_up': 0x00693290,
+        'type_select_down': 'sub_00732CA0', 'type_select_up': 'sub_00732CC0',
+        'box_walk': 0x004ABCEB, 'box_walk_fn': 'sub_006D9FF0',
+        'box_select': 0x004AC2F1, 'box_object': 'esi', 'is_selected': 0x83,
+        'select_slot': 0x14C, 'deselect_slot': 0x150,
+        'selection_count': 0x00A8ECC8, 'selection_data': 0x00A8ECBC,
+        'unit_vtable': 0x007F5C70, 'infantry_vtable': 0x007EB058,
+        'aircraft_vtable': 0x007E22A4,
+    },
+    'game': {
+        'message': 0x0066A467, 'radar': 0x0062FE33, 'radar_stack': 0x44,
+        'action': 0x0066A5D1, 'right_up': 0x0049B0CE,
+        'special_state': 0x11A0, 'special_flags': 0x11AC, 'special_sentinel': 0x11B4,
+        'box_clear': 0x0049BE44, 'object_clear': 0x0049BFB4,
+        'clear': 0x00482BC0, 'clear_skip': 'L_00482BE1', 'clear_fn': 'sub_00482BC0',
+        'after_left_up': 0x0066A5F0,
+        'type_select_down': 'sub_006F7650', 'type_select_up': 'sub_006F7670',
+        'box_walk': 0x0049BE5B, 'box_walk_fn': 'sub_006AA610',
+        'box_select': 0x0049C470, 'box_object': 'edi', 'is_selected': 0x77,
+        'select_slot': 0x140, 'deselect_slot': 0x144,
+        'selection_count': 0x00A40C70, 'selection_data': 0x00A40C64,
+        'unit_vtable': 0x007ADDF8, 'infantry_vtable': 0x007A3540,
+        'aircraft_vtable': 0x0079B12C,
+    },
+}
+
+
+QUEUE_FIVE_TARGETS = {
+    'gamemd': {
+        'count': 0x00A802C8, 'index': 0x00A802D0, 'ring': 0x00A802D4,
+        'stamps': 0x00A83A54, 'get_async_key_state': 0x007E13E0,
+        'time_get_time': 0x007E1530, 'sites': (0x006AB511, 0x006AB76E),
+    },
+    'game': {
+        'count': 0x00A32338, 'index': 0x00A32340, 'ring': 0x00A32344,
+        'stamps': 0x00A35AC4, 'get_async_key_state': 0x0079A3B4,
+        'time_get_time': 0x0079A524, 'sites': (0x0068119E, 0x006813EF),
+    },
+}
+
+
+def modern_controls_patches(target):
+    """Modern controls' battlefield mouse behavior, for either game target."""
+    t = MODERN_CONTROLS_TARGETS[target]
+    clear_fn = t['clear_fn']
+    addr = lambda key: '0x%08Xu' % t[key]
+    special_expr = (
+        'MEM32(esi + 0x%X) != 0 || '
+        'MEM8(esi + 0x%X) || MEM8(esi + 0x%X) || MEM8(esi + 0x%X) || '
+        'MEM8(esi + 0x%X) || MEM8(esi + 0x%X) || '
+        'MEM32(esi + 0x%X) != 0xFFFFFFFFu'
+    ) % (t['special_state'], t['special_flags'], t['special_flags'] + 1,
+         t['special_flags'] + 2, t['special_flags'] + 3, t['special_flags'] + 4,
+         t['special_sentinel'])
+    patches = {
+        # The game has already read the Windows message here. Route right
+        # presses through left-button bookkeeping only when no active
+        # placement/order mode needs its original right-up cancellation.
+        t['message']: (
+            '{ extern uint32_t ra2_modern_mouse_message(uint32_t, int); '
+            'int special = %s; '
+            'eax = ra2_modern_mouse_message(eax, special); } '
+            '/* optional F10 Modern controls */') % special_expr,
+        # Keep the mapped radar flags in the stack argument as well as DL;
+        # later branches in this handler read the argument again.
+        t['radar']: (
+            '{ extern uint32_t ra2_modern_radar_event_flags(uint32_t); '
+            'SET_LO8(edx, ra2_modern_radar_event_flags(LO8(edx))); '
+            'MEM8(esp + 0x%X) = LO8(edx); } '
+            '/* swap radar left/right event flags in Modern mode */') % t['radar_stack'],
+        # In Modern mode, plain left-clicks select objects or clear the
+        # selection on open ground; contextual orders remain on right-click.
+        # The mouse-up handler (0x004AB9B0) still selects a selectable target
+        # when the action is None, so a click that must not touch the
+        # selection (0xFFFFFFFE) also clears the target slot it reads.
+        t['action']: (
+            '{ extern uint32_t ra2_modern_left_click_action(uint32_t, uint32_t, uint32_t, int, uint32_t, int); '
+            'int special = %s; '
+            'uint32_t target = MEM32(esp + 0x30); uint32_t vtable = target ? MEM32(target) : 0; '
+            'uint32_t selection_count = MEM32(%s); uint32_t selected_in_group = 0; '
+            'uint32_t selected_data = MEM32(%s); '
+            'if (target && selected_data && selection_count <= 4096u) '
+            'for (uint32_t i = 0; i < selection_count; ++i) '
+            'if (MEM32(selected_data + i * 4u) == target) { selected_in_group = 1; break; } '
+            'uint32_t action = ra2_modern_left_click_action(eax, target, vtable, selected_in_group, selection_count, special); '
+            'if (action == 0xFFFFFFFFu) { RECOMP_CALL(%s); RECOMP_FLAGS_IN(); eax = 0; } '
+            'else if (action == 0xFFFFFFFEu) { MEM32(esp + 0x30) = 0; eax = 0; } '
+            'else eax = action; } '
+            '/* optional F10 Modern controls */') % (special_expr, addr('selection_count'), addr('selection_data'), clear_fn),
+        # Just after LeftMouseButtonUp returns: run a same-type selection the
+        # click asked for (TypeSelectCommandClass's own key-down and key-up
+        # halves, as one tap of its key), then end the click's one-shot
+        # selection-clear skip.
+        t['after_left_up']: (
+            '{ extern int ra2_modern_take_type_select(void); '
+            'extern void ra2_modern_end_left_up(void); '
+            'if (ra2_modern_take_type_select()) { '
+            'RECOMP_CALL(%s); RECOMP_FLAGS_IN(); RECOMP_CALL(%s); RECOMP_FLAGS_IN(); } '
+            'ra2_modern_end_left_up(); } '
+            '/* optional F10 Modern controls */') % (t['type_select_down'], t['type_select_up']),
+        # A Shift box over units that are all selected already removes them.
+        # With Shift held, walk the box once as a dry run (the walk clears the
+        # box it reads, so put it back), let the presenter decide, then walk it
+        # for real.
+        t['box_walk']: (
+            '@replace:{ extern int ra2_modern_shift_box_begin(void); '
+            'extern void ra2_modern_shift_box_decide(void); extern void ra2_modern_shift_box_end(void); '
+            'if (ra2_modern_shift_box_begin()) { '
+            'uint32_t _box_this = ecx, _box_cb = MEM32(esp); '
+            'uint32_t _box_a = MEM32(_box_this + 0xD90u), _box_b = MEM32(_box_this + 0xD94u); '
+            'PUSH32(esp, _box_cb); RECOMP_CALL(%s); RECOMP_FLAGS_IN(); '
+            'MEM32(_box_this + 0xD90u) = _box_a; MEM32(_box_this + 0xD94u) = _box_b; '
+            'ecx = _box_this; ra2_modern_shift_box_decide(); } '
+            'RECOMP_CALL(%s); ra2_modern_shift_box_end(); } '
+            '/* optional F10 Modern controls */') % (t['box_walk_fn'], t['box_walk_fn']),
+        # The box walk's per-object Select(): skipped in the dry run, Deselect()
+        # when the whole box was already selected.
+        t['box_select']: (
+            '@replace:{ extern int ra2_modern_box_object(int); '
+            'int _box = ra2_modern_box_object(MEM8(%s + 0x%X) != 0); '
+            'if (_box == 1) RECOMP_ICALL(MEM32(edx + 0x%X)); '
+            'else { if (_box == 2) RECOMP_ICALL(MEM32(edx + 0x%X)); eax = 0; } } '
+            '/* optional F10 Modern controls */') % (
+                t['box_object'], t['is_selected'], t['select_slot'], t['deselect_slot']),
+        # The original right-up cleanup clears selection after camera pan.
+        t['right_up']: (
+            '@replace:{ extern int ra2_modern_consume_right_drag_release(void); '
+            'if (!ra2_modern_consume_right_drag_release()) RECOMP_CALL(%s); } '
+            '/* optional F10 Modern controls */') % clear_fn,
+        # The drag-selection release normally clears the selection before
+        # applying the rectangle. Keep it when Shift is held in Modern mode.
+        t['box_clear']: (
+            '@replace:{ extern int ra2_modern_preserve_shift_selection(void); '
+            'if (!ra2_modern_preserve_shift_selection()) RECOMP_CALL(%s); } '
+            '/* optional F10 Modern controls */') % clear_fn,
+        # The virtual mouse-up path and the same-type selection can clear
+        # selection through this shared routine instead of either mouse-up
+        # clear site above.
+        t['clear']: (
+            '{ extern int ra2_modern_preserve_global_selection_clear(void); '
+            'if (ra2_modern_preserve_global_selection_clear()) goto %s; } '
+            '/* preserve existing selection during a Shift-click or Shift box drag */') % t['clear_skip'],
+        # Mouse-up can also clear selection while processing a target object.
+        t['object_clear']: (
+            '@replace:{ extern int ra2_modern_preserve_shift_selection(void); '
+            'if (!ra2_modern_preserve_shift_selection()) RECOMP_CALL(%s); } '
+            '/* optional F10 Modern controls */') % clear_fn,
+    }
+    return patches
+
+
+def queue_five_patches(target):
+    """Modern controls: Shift-click a sidebar build icon to queue five of it
+    (docs/modern-controls.md)."""
+    t = QUEUE_FIVE_TARGETS[target]
+
+    def after_production_event():
+        return (
+            '{ extern int ra2_queue_five_append(uint32_t, uint32_t); '
+            'extern int ra2_modern_controls(void); '
+            'uint32_t _queue_five_event = eax; '
+            'if (ra2_modern_controls()) { '
+            'PUSH32(esp, 0x10u); '
+            'RECOMP_ICALL(MEM32(0x%08Xu)); RECOMP_FLAGS_IN(); '
+            'if (eax & 0x8000u) { uint32_t _queue_five_added = 0; '
+            'while (_queue_five_added < 4u && MEM32(0x%08Xu) < 0x80u) { '
+            'RECOMP_ICALL(MEM32(0x%08Xu)); RECOMP_FLAGS_IN(); '
+            'if (!ra2_queue_five_append(_queue_five_event, eax)) break; '
+            '++_queue_five_added; } } } '
+            'eax = _queue_five_event; } '
+            '/* Queue Five (Modern controls): Shift-click adds four matching events before the original. */'
+        ) % (t['get_async_key_state'], t['count'], t['time_get_time'])
+
+    # These are the two normal production-event branches for this target.
+    return {site: after_production_event() for site in t['sites']}
+
+
+# The Cohen-Sutherland line clipper (game 0x00775620, gamemd 0x007BC2B0) clips
+# the outside point to an edge, recomputing the other coordinate from the point
+# itself, and loops until both outcodes are clear or share a bit. A line through
+# a rect corner can leave the point a rounding error outside one edge, then the
+# other, forever: one core at 100 % and the sound looping (issue #20). Native
+# doubles are what the x87 computes too at the game's 53-bit precision, so this
+# is the game's own hang. A correct clip ends within 8 rounds; past 64 the line
+# is rejected, as one wholly outside is, and goes undrawn for that frame.
+CLIP_LINE_SITES = {   # loop head (test edx, edx), accept path, reject path
+    'gamemd': (0x007BC3CE, 0x007BC529, 0x007BC56C),
+    'game': (0x0077573E, 0x00775899, 0x007758DC),
+}
+
+
+def clip_line_patches(target):
+    head, accept, reject = CLIP_LINE_SITES[target]
+    reset = '{ extern unsigned ra2_clip_rounds; ra2_clip_rounds = 0; } /* line clip cap (issue #20) */'
+    return {head: '{ extern unsigned ra2_clip_rounds; if (++ra2_clip_rounds > 64) goto L_%08X; } '
+                  '/* line clip cap (issue #20) */' % reject,
+            accept: reset, reject: reset}
+
+
+def apply_patches(body, patches):
+    """Add each patch's C after the line that lifts its instruction."""
+    for va, c in patches.items():
+        tag = '/* 0x%08X:' % va
+        k = body.find(tag)
+        if k != -1:
+            start = body.rfind('\n', 0, k) + 1
+            e = body.index('\n', k)
+            if c.startswith('@replace:'):
+                body = body[:start] + '    ' + c[len('@replace:'):] + '\n' + body[e + 1:]
+            else:
+                body = body[:e + 1] + '    ' + c + '\n' + body[e + 1:]
+    return body
+
+
+# Red Alert 2 itself (game.exe, the same install) is a second target: its own
+# catalog in work/game, its lift in src/recomp/gen_game, its own seeds, hooks
+# and patches. Everything address-bound the host needs comes to it through
+# recomp_target.h, written beside the lifted C.
+RUN_SEEDS_GAME = [
+    0x00524FF0,   # a static constructor (the _initterm table at 0x007C9000)
+    0x007492D0,   # a callback named only by an immediate (0x007458D8: mov edx, 0x7492d0)
+]
+HOOKS_GAME = {
+    0x004068F0: 'debuglog',            # the bare-ret debug printf, 1,592 callers
+}
+
+
+def targets():
+    return {
+        'gamemd': dict(exe=EXE, catalog=CATALOG, seeds=SEEDS, out=OUT, stats=STATS,
+                       run_seeds=RUN_SEEDS, hooks=HOOKS, exe_name='gamemd.exe', ini_name='RA2MD.INI',
+                       title="Yuri's Revenge", game_frame=0x00A8ED84, stamp=0x3BDF544E,
+                       patches=lambda code, cs: {**sidebar_rows_patches(code, cs), **HD_VOXEL_PATCHES,
+                                                 **modern_controls_patches('gamemd'), **queue_five_patches('gamemd'),
+                                                 **clip_line_patches('gamemd')}),
+        'game': dict(exe=os.path.join(_HERE, 'game', 'game.exe'),
+                     catalog=os.path.join(_HERE, 'work', 'game', 'functions.json'),
+                     seeds=os.path.join(_HERE, 'work', 'game', 'rtti_seeds.json'),
+                     out=os.path.join(_HERE, 'src', 'recomp', 'gen_game'),
+                     stats=os.path.join(_HERE, 'work', 'game', 'lift_stats.json'),
+                     run_seeds=RUN_SEEDS_GAME, hooks=HOOKS_GAME, exe_name='game.exe', ini_name='RA2.INI',
+                     title='Red Alert 2', game_frame=0x00A40D2C, stamp=0x3B1EBBED,
+                     # Red Alert 2's sidebar: its code at 0x0067B000..0x00683000, its
+                     # height 0x0083962C and top 0x00ABCD64, the globals the same divide
+                     # by 50 reads as Yuri's Revenge's does.
+                     patches=lambda code, cs: {**sidebar_rows_patches(code, cs, 0x0067B000, 0x00683000,
+                                                                     (0x0083962C, 0x00ABCD64)),
+                                               **HD_VOXEL_PATCHES_GAME,
+                                               **modern_controls_patches('game'), **queue_five_patches('game'),
+                                               **clip_line_patches('game')}),
+    }
+
+
+def write_target_header(out, name, t):
+    """recomp_target.h: what the host needs to know about the binary it runs."""
+    debuglog = [a for a, h in t['hooks'].items() if h == 'debuglog']
+    with open(os.path.join(out, 'recomp_target.h'), 'w', newline='\n') as f:
+        f.write('/* Generated by run_lift.py --target %s: the binary this build runs. */\n#pragma once\n' % name)
+        f.write('#define RA2_TARGET_%s 1\n' % name.upper())
+        f.write('#define RA2_EXE_NAME "%s"\n' % t['exe_name'])
+        f.write('#define RA2_INI_NAME "%s"\n' % t['ini_name'])
+        f.write('#define RA2_TITLE "%s"\n' % t['title'])
+        f.write('#define RA2_HOOK_DEBUGLOG_VA 0x%08Xu\n' % (debuglog[0] if debuglog else 0))
+        f.write('#define RA2_GAME_FRAME_VA 0x%08Xu   /* the game\'s frame count */\n' % t['game_frame'])
+        f.write('#define RA2_EXE_STAMP 0x%08Xu   /* its PE timestamp: the build lifted */\n' % t['stamp'])
+        modern = MODERN_CONTROLS_TARGETS[name]
+        queue = QUEUE_FIVE_TARGETS[name]
+        for key, macro in (('unit_vtable', 'RA2_MODERN_UNIT_VTABLE'),
+                           ('infantry_vtable', 'RA2_MODERN_INFANTRY_VTABLE'),
+                           ('aircraft_vtable', 'RA2_MODERN_AIRCRAFT_VTABLE')):
+            f.write('#define %s 0x%08Xu\n' % (macro, modern[key]))
+        for key, macro in (('count', 'RA2_QUEUE_FIVE_COUNT_VA'), ('index', 'RA2_QUEUE_FIVE_INDEX_VA'),
+                           ('ring', 'RA2_QUEUE_FIVE_RING_VA'), ('stamps', 'RA2_QUEUE_FIVE_STAMPS_VA')):
+            f.write('#define %s 0x%08Xu\n' % (macro, queue[key]))
+
+
+def exe_stamp(path):
+    """The PE header's TimeDateStamp: which build of the game an exe is."""
+    with open(path, 'rb') as f:
+        head = f.read(4096)
+    nt = int.from_bytes(head[0x3C:0x40], 'little')
+    return int.from_bytes(head[nt + 8:nt + 12], 'little')
+
+
+def lifter_stamp():
+    """What a lift depends on besides the game: the toolkit's lifter and this
+    file's patches. Setup re-lifts when it differs from the one the lift wrote
+    (src/recomp/gen/lift_stamp.txt), so a lifter fix reaches an existing install:
+    a lift from before MMX paddusb was lifted drew every light as a black circle."""
+    h = hashlib.sha1()
+    for p in (os.path.join(_TOOLS, 'lift', 'lift32.py'), os.path.join(_TOOLS, 'lift', 'generate.py'),
+              os.path.abspath(__file__)):
+        h.update(open(p, 'rb').read().replace(b'\r\n', b'\n'))
+    return h.hexdigest()[:16]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--target', choices=('gamemd', 'game'), default='gamemd',
+                    help="gamemd: Yuri's Revenge (the default); game: Red Alert 2")
+    ap.add_argument('--exe')
+    ap.add_argument('--catalog')
+    ap.add_argument('--out')
+    ap.add_argument('--roots', default='', help='comma-separated extra root VAs')
+    ap.add_argument('--max', type=int, default=3000, help='closure size cap')
+    ap.add_argument('--all', action='store_true', help='lift every function')
+    ap.add_argument('--virtual', action='store_true',
+                    help='root the closure at every RTTI vtable method too')
+    ap.add_argument('--split', type=int, default=400, help='functions per .c file')
+    # More entries a run found, on top of RUN_SEEDS (seed_from_log.py JSON).
+    ap.add_argument('--seeds', default=None,
+                    help='seed_from_log.py JSON of unresolved targets from runs')
+    ap.add_argument('--check', action='store_true',
+                    help='exit 0 if the lift is current (this lifter, these patches), 1 if not')
+    args = ap.parse_args()
+    tgt = targets()[args.target]
+    if args.check:
+        try:
+            sys.exit(0 if open(os.path.join(args.out or tgt['out'], 'lift_stamp.txt')).read().strip()
+                     == lifter_stamp() else 1)
+        except OSError:
+            sys.exit(1)
+    args.exe = args.exe or tgt['exe']
+    args.catalog = args.catalog or tgt['catalog']
+    args.out = args.out or tgt['out']
+    if args.seeds is None:
+        args.seeds = os.path.join(os.path.dirname(tgt['catalog']), 'run_seeds.json')
+    if not os.path.exists(args.catalog):
+        sys.exit('no catalog at %s -- run disasm32.py first (README, Step by step)' % args.catalog)
+
+    # The patches below are at this build's addresses; another build lifts,
+    # but they land in the wrong code, and it crashes in game (issue #2).
+    stamp = exe_stamp(args.exe)
+    if stamp != tgt['stamp']:
+        sys.exit('%s is not the build this project supports: its PE timestamp is 0x%08X, '
+                 'the Steam and EA App release\'s is 0x%08X (docs/RECON.md). A different '
+                 'release (a CD, a CnCNet- or mod-patched exe) needs its own addresses; '
+                 'use the Steam or EA App build\'s %s.' % (args.exe, stamp, tgt['stamp'], tgt['exe_name']))
+    info = analyze_pe(args.exe)
+    iat = build_iat_map(info)
+    cs, ce = info.code_start, info.code_end
+    print('[*] base=0x%08X code=0x%08X-0x%08X IAT=%d' % (info.image_base, cs, ce, len(iat)))
+
+    cat = json.load(open(args.catalog))
+    byaddr = {f['address']: f for f in cat['functions'] if cs <= f['address'] < ce}
+    print('[*] catalog: %d functions inside .text' % len(byaddr))
+
+    # Vtable slots. Bound each by the next known entry: a slot landing mid-code
+    # handed `ce` makes the extent walk descend the whole of .text.
+    want = {a for a in tgt['run_seeds'] if cs <= a < ce and a not in byaddr}
+    for path in [tgt['seeds']] + ([args.seeds] if args.seeds else []):
+        if os.path.exists(path):
+            want |= {e['address'] for e in json.load(open(path))
+                     if cs <= e['address'] < ce and e['address'] not in byaddr}
+    known = sorted(set(byaddr) | want)
+    nxt = {a: (known[i + 1] if i + 1 < len(known) else ce) for i, a in enumerate(known)}
+    for a in want:
+        byaddr[a] = {'address': a, 'end': min(nxt[a], a + 0x100), 'calls_to': [],
+                     'entry_kind': 'start'}
+    print('[*] vtable slots not in the catalog: %d injected' % len(want))
+
+    entry = info.image_base + info.entry_point_rva
+    roots = [entry] + [int(x, 0) for x in args.roots.split(',') if x.strip()]
+    if args.virtual and os.path.exists(tgt['seeds']):
+        roots += sorted(e['address'] for e in json.load(open(tgt['seeds'])))
+    if args.all:
+        chosen = set(byaddr)
+    else:
+        chosen = set(closure(byaddr, roots, args.max))
+    print('[*] lifting %d of %d functions (%s)'
+          % (len(chosen), len(byaddr), 'all' if args.all else 'closure, cap %d' % args.max))
+
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    text = [s for s in info.sections if s.name == '.text'][0]
+    code = open(args.exe, 'rb').read()[text.raw_offset:text.raw_offset + text.raw_size]
+
+    # Known targets become RECOMP_CALL; anything else a decoded `call` names
+    # becomes RECOMP_ICALL, which reports at run time instead of failing the build.
+    # precise carry: adc/sbb take their carry from the flag state that set it.
+    # The default reads a `_cf` that add/sub/cmp never write, which breaks
+    # every 64-bit add and subtract. The Movies lost its menu video to it
+    # (its docs/bringup.md); off by default in lift32 only because Fury3 leans
+    # on the imprecision.
+    patches = tgt['patches'](code, cs)
+    print('[*] remaster patches: %d' % len(patches))
+    lifter = Lifter(iat_map=iat, lifted=set(byaddr), precise_carry=True, precise_sbb=True)
+    os.makedirs(args.out, exist_ok=True)
+    for fn in os.listdir(args.out):                 # a smaller lift must not leave stale chunks
+        if fn.startswith('recomp_') and fn.endswith('.c'):
+            os.remove(os.path.join(args.out, fn))
+    entries, chunk, idx, errors, dirty = [], [], 0, 0, 0
+    ordered = sorted(byaddr)
+    starts = {a for a in ordered if byaddr[a].get('entry_kind') != 'alias'}
+    t_split = time.time()
+    splits = find_splits(md, code, cs, ce, starts)
+    starts -= splits          # still dispatchable; just not a wall inside its parent
+    print('[*] split entries (the middle of the function before them): %d, %.0fs'
+          % (len(splits), time.time() - t_split))
+    t0 = time.time()
+
+    def flush(force=False):
+        nonlocal chunk, idx
+        if chunk and (force or len(chunk) >= args.split):
+            write_chunk(args.out, idx, chunk)
+            idx += 1
+            chunk = []
+
+    def lift_one(addr, name, end, reached):
+        nonlocal errors
+
+        if addr in tgt['hooks']:
+            hook = tgt['hooks'][addr]
+            chunk.append(('extern void ra2_hook_%s(void);\nvoid %s(void) { ra2_hook_%s(); }\n'
+                          % (hook, name, hook), addr, name))
+            entries.append((addr, name))
+            return
+        try:
+            lo = min(reached) if reached else addr   # a chunk can sit below the entry
+            insns, leaders = (linear_disassemble_function(md, code, cs, lo, end, reached=reached)
+                              if end > addr else ([], None))
+            if leaders is not None:
+                leaders.add(addr)
+            body = (lift_function_linear(lifter, name, insns, leaders, addr) if insns
+                    else 'void %s(void) { }\n' % name)
+            body = apply_patches(body, {va: c for va, c in patches.items() if reached and va in reached})
+        except Exception as e:                      # noqa: BLE001 -- counted, not hidden
+            body = '/* ERROR %s: %s */\nvoid %s(void) { }\n' % (name, e, name)
+            errors += 1
+        chunk.append((body, addr, name))
+        entries.append((addr, name))
+        if len(chunk) >= args.split:
+            flush()
+            print('[*]   %d/%d (%d err)' % (len(entries), len(chosen), errors), flush=True)
+
+    # A direct branch that leaves a body backward to an address nothing
+    # catalogued is a tail call the catalog missed (__mtterm: jmp 0x00AD6FB7)
+    # or a jump into shared code in a neighbour (hand-written x87 math:
+    # __ffexpm1 jne 0x00AE01F0). A direct call can name one too: the catalog
+    # dropped 0x00C10170, called directly, because a false start inside the
+    # jump table before it decoded over it. Either way the target has to be dispatchable,
+    # or the RECOMP_ITAIL cannot resolve. So each round's outside targets
+    # become entries and are lifted in the next round, until none are new.
+    todo, added = sorted(chosen), 0
+    while todo:
+        outside = set()
+        for addr in todo:
+            name = 'sub_%08X' % addr
+            reached, behind, called = set(), set(), set()
+            end, clean = true_extent(md, code, cs, addr, min(addr + EXTENT_REACH, ce), starts,
+                                     reached=reached, behind=behind, called=called)
+            outside |= {t for t in behind if t not in reached} | called
+            dirty += not clean
+            lift_one(addr, name, end, reached)
+        todo = sorted(t for t in outside if cs <= t < ce and t not in byaddr)
+        for t in todo:
+            byaddr[t] = {'address': t, 'end': ce, 'calls_to': [], 'entry_kind': 'start'}
+            chosen.add(t)
+        added += len(todo)
+    print('[*] branch and call targets outside the catalog, added as entries: %d' % added)
+
+    stubs = [a for a in ordered if a not in chosen]
+    for a in stubs:
+        name = 'sub_%08X' % a
+        chunk.append(('void %s(void) { RECOMP_NOT_LIFTED(0x%08Xu); }\n' % (name, a), a, name))
+        entries.append((a, name))
+        flush()
+    flush(force=True)
+
+    with open(os.path.join(args.out, 'recomp_funcs.h'), 'w', newline='\n') as f:
+        f.write('/* gamemd.exe - AUTO-GENERATED by run_lift.py */\n#pragma once\n'
+                '#include <stdint.h>\n\n'
+                'void recomp_not_lifted(uint32_t va);\n'
+                '#define RECOMP_NOT_LIFTED(va) recomp_not_lifted(va)\n\n')
+        for a, n in entries:
+            f.write('void %s(void);\n' % n)
+    with open(os.path.join(args.out, 'recomp_dispatch.c'), 'w', newline='\n') as f:
+        f.write('/* gamemd.exe - AUTO-GENERATED by run_lift.py */\n'
+                '#include "recomp_types.h"\n#include "recomp_funcs.h"\n\n'
+                'const recomp_dispatch_entry_t recomp_dispatch_table[] = {\n')
+        for a, n in sorted(entries):
+            f.write('    { 0x%08Xu, %s },\n' % (a, n))
+        f.write('};\nconst uint32_t recomp_dispatch_count = %d;\n'
+                'const uint32_t ra2_entry_va = 0x%08Xu;\n' % (len(entries), entry))
+
+    # Readable names, and a header on every function saying what it is, from
+    # what the binary itself says: RTTI's vtables, debug messages, vtable
+    # stores (pcrecomp's tools/lift/name_lift.py). An older toolkit without it
+    # leaves the address names; nothing else depends on them.
+    try:
+        import name_lift
+    except ImportError:
+        print('[*] names: no tools/lift/name_lift.py in this pcrecomp; functions keep their address names')
+    else:
+        rtti_path = os.path.join(os.path.dirname(tgt['seeds']), 'rtti.json')
+        rtti = json.load(open(rtti_path)) if os.path.exists(rtti_path) else {}
+        known = {va: 'hook_%s' % hook for va, hook in tgt['hooks'].items()}
+        named = name_lift.name_lift(args.out, name_lift.Image(args.exe), rtti, known)
+        print('[*] names: %d of %d functions named from the binary\'s own evidence'
+              % (sum(1 for f in named.values() if f.name), len(named)))
+
+    lines = sum(sum(1 for _ in open(os.path.join(args.out, fn), encoding='utf-8', errors='replace'))
+                for fn in os.listdir(args.out))
+    stats = {'lifted': len(chosen), 'stubs': len(stubs), 'errors': errors,
+             'no_terminator': dirty, 'files': idx, 'lines': lines}
+    json.dump(stats, open(tgt['stats'], 'w'), indent=1)
+    write_target_header(args.out, args.target, tgt)
+    open(os.path.join(args.out, 'lift_stamp.txt'), 'w').write(lifter_stamp() + '\n')
+    print('=' * 60)
+    print('  lifted %d   not-lifted stubs %d   errors %d   no terminator %d'
+          % (len(chosen), len(stubs), errors, dirty))
+    print('  %s lines of C in %d files, %.1fs' % (format(lines, ','), idx, time.time() - t0))
+    print('=' * 60)
+
+
+if __name__ == '__main__':
+    main()
