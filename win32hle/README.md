@@ -1,5 +1,10 @@
 # runtime/win32hle — an implemented Win32, for running lifted PE code off Windows
 
+> This repository's copy (`NOTICE.md`): only the files the WASI build
+> compiles (`wasi/build.sh`), with its changes. `native32/`, `nextstep/`,
+> `screen.c` (the SDL display: here `wasi/screen.c`), `present.c` and the
+> selftests named below are pcrecomp's, not here.
+
 `native32/` runs a lifted 32-bit Windows program by forwarding its imports to
 the **real** Win32 API, so it only runs on Windows. `win32hle/` *answers those
 imports itself*, on libc / POSIX / SDL2, so the same lifted program runs on

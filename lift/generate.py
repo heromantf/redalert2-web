@@ -11,15 +11,8 @@ import re
 import time
 import json
 
-# The lifter and the PE reader are siblings under tools/, not a package. This
-# file used to import them as `tools.pe_analyze` / `tools.lifter`, which have
-# never been the paths -- so it did not import at all, and every project forked
-# it instead of using it.
-_TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for _d in ('pe', 'lift', 'disasm'):
-    _p = os.path.join(_TOOLS, _d)
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+# The lifter and the PE reader are this file's neighbours in lift/ (a script's
+# folder is on sys.path), not a package.
 
 import lift32
 from pe_analyze import analyze_pe, build_iat_map

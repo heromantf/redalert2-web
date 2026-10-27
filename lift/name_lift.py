@@ -52,8 +52,7 @@ import struct
 import sys
 from collections import Counter, defaultdict
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pe'))
-from merge_names import sanitize  # noqa: E402
+from merge_names import sanitize  # noqa: E402  (beside this file, lift/)
 
 MARK = '/* Functions named by name_lift.py */'
 FUNC_DEF = re.compile(r'^void (sub_[0-9A-F]{8})\(void\) \{', re.M)

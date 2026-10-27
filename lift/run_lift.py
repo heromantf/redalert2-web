@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Red Alert 2: Yuri's Revenge lift driver: work/functions.json -> src/recomp/gen/.
+"""Red Alert 2: Yuri's Revenge lift driver: out/lift/functions.json -> out/lift/gen/.
+
+From redalert2-recomp (NOTICE.md): the docs/ and src/ named below are that
+repository's, not this one's; tools/lift.sh runs the whole pipeline.
 
 Drives pcrecomp's shared `tools/lift/generate.py` + `lift32`, the same shape
 as The Movies' and Force Commander's run_lift.py (docs/architecture.md):
@@ -29,16 +32,9 @@ import os
 import sys
 import time
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-# PCRECOMP picks another toolkit checkout, the same knob CMakeLists.txt has:
-# the lifter and the runtime header must come from the same tree.
-# Else ../pcrecomp, or ../tools where older setups put it.
-_KIT = os.path.join(_HERE, '..', 'pcrecomp')
-if not os.path.isdir(_KIT) and os.path.isdir(os.path.join(_HERE, '..', 'tools', 'runtime')):
-    _KIT = os.path.join(_HERE, '..', 'tools')
-_TOOLS = os.path.join(os.environ.get('PCRECOMP', _KIT), 'tools')
-sys.path.insert(0, os.path.join(_TOOLS, 'lift'))
-sys.path.insert(0, os.path.join(_TOOLS, 'pe'))
+_HERE = os.path.dirname(os.path.abspath(__file__))     # lift/: the lifter and the PE reader beside this file
+_WEB = os.path.dirname(_HERE)
+_LIFT = os.path.join(_WEB, 'out', 'lift')             # what a lift makes of the game: never committed
 
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32          # noqa: E402
 from generate import (EXTENT_REACH, closure, find_splits, true_extent,  # noqa: E402
@@ -46,11 +42,12 @@ from generate import (EXTENT_REACH, closure, find_splits, true_extent,  # noqa: 
 from lift32 import Lifter                                  # noqa: E402
 from pe_analyze import analyze_pe, build_iat_map           # noqa: E402
 
-EXE = os.path.join(_HERE, 'game', 'gamemd.exe')
-CATALOG = os.path.join(_HERE, 'work', 'functions.json')
-SEEDS = os.path.join(_HERE, 'work', 'rtti_seeds.json')
-OUT = os.path.join(_HERE, 'src', 'recomp', 'gen')
-STATS = os.path.join(_HERE, 'work', 'lift_stats.json')
+_GAME = os.environ.get('RA2_GAME') or os.path.join(_WEB, 'work', 'game')   # the game folder the page serves
+EXE = os.path.join(_GAME, 'gamemd.exe')
+CATALOG = os.path.join(_LIFT, 'functions.json')
+SEEDS = os.path.join(_LIFT, 'rtti_seeds.json')
+OUT = os.path.join(_LIFT, 'gen')
+STATS = os.path.join(_LIFT, 'lift_stats.json')
 
 # Entries the catalog does not find, so a clean checkout lifts them too
 # (docs/bringup.md 1 and 11). The CRT's static constructors are reachable only
@@ -458,7 +455,7 @@ def apply_patches(body, patches):
 
 
 # Red Alert 2 itself (game.exe, the same install) is a second target: its own
-# catalog in work/game, its lift in src/recomp/gen_game, its own seeds, hooks
+# catalog in out/lift/game, its lift in out/lift/gen_game, its own seeds, hooks
 # and patches. Everything address-bound the host needs comes to it through
 # recomp_target.h, written beside the lifted C.
 RUN_SEEDS_GAME = [
@@ -478,11 +475,11 @@ def targets():
                        patches=lambda code, cs: {**sidebar_rows_patches(code, cs), **HD_VOXEL_PATCHES,
                                                  **modern_controls_patches('gamemd'), **queue_five_patches('gamemd'),
                                                  **clip_line_patches('gamemd')}),
-        'game': dict(exe=os.path.join(_HERE, 'game', 'game.exe'),
-                     catalog=os.path.join(_HERE, 'work', 'game', 'functions.json'),
-                     seeds=os.path.join(_HERE, 'work', 'game', 'rtti_seeds.json'),
-                     out=os.path.join(_HERE, 'src', 'recomp', 'gen_game'),
-                     stats=os.path.join(_HERE, 'work', 'game', 'lift_stats.json'),
+        'game': dict(exe=os.path.join(_GAME, 'game.exe'),
+                     catalog=os.path.join(_LIFT, 'game', 'functions.json'),
+                     seeds=os.path.join(_LIFT, 'game', 'rtti_seeds.json'),
+                     out=os.path.join(_LIFT, 'gen_game'),
+                     stats=os.path.join(_LIFT, 'game', 'lift_stats.json'),
                      run_seeds=RUN_SEEDS_GAME, hooks=HOOKS_GAME, exe_name='game.exe', ini_name='RA2.INI',
                      title='Red Alert 2', game_frame=0x00A40D2C, stamp=0x3B1EBBED,
                      # Red Alert 2's sidebar: its code at 0x0067B000..0x00683000, its
@@ -530,10 +527,10 @@ def exe_stamp(path):
 def lifter_stamp():
     """What a lift depends on besides the game: the toolkit's lifter and this
     file's patches. Setup re-lifts when it differs from the one the lift wrote
-    (src/recomp/gen/lift_stamp.txt), so a lifter fix reaches an existing install:
+    (out/lift/gen/lift_stamp.txt), so a lifter fix reaches an existing install:
     a lift from before MMX paddusb was lifted drew every light as a black circle."""
     h = hashlib.sha1()
-    for p in (os.path.join(_TOOLS, 'lift', 'lift32.py'), os.path.join(_TOOLS, 'lift', 'generate.py'),
+    for p in (os.path.join(_HERE, 'lift32.py'), os.path.join(_HERE, 'generate.py'),
               os.path.abspath(__file__)):
         h.update(open(p, 'rb').read().replace(b'\r\n', b'\n'))
     return h.hexdigest()[:16]
@@ -571,7 +568,7 @@ def main():
     if args.seeds is None:
         args.seeds = os.path.join(os.path.dirname(tgt['catalog']), 'run_seeds.json')
     if not os.path.exists(args.catalog):
-        sys.exit('no catalog at %s -- run disasm32.py first (README, Step by step)' % args.catalog)
+        sys.exit('no catalog at %s -- run tools/lift.sh (disasm32.py makes it)' % args.catalog)
 
     # The patches below are at this build's addresses; another build lifts,
     # but they land in the wrong code, and it crashes in game (issue #2).

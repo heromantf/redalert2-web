@@ -7,11 +7,11 @@ CSF at run time, so the template alone says what every button is. The
 playtest cases (tools/playtest.py) press buttons by dialog and control ID,
 and this map is how those IDs were found.
 
-The output is derived from the binary, so it lives in work/ and is never
-committed (REPO_RULES section 3).
+The output is derived from the binary, so it lives in out/lift/ and is never
+committed. From redalert2-recomp (NOTICE.md).
 
-    py -3 tools/dialogs.py                     # -> work/dialogs.json
-    py -3 tools/dialogs.py --show 0x100        # one dialog, readable
+    .venv/bin/python lift/dialogs.py                  # -> out/lift/dialogs.json
+    .venv/bin/python lift/dialogs.py --show 0x100     # one dialog, readable
 """
 import argparse
 import json
@@ -20,7 +20,8 @@ import struct
 
 import pefile
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the repository
+GAME = os.environ.get('RA2_GAME') or os.path.join(ROOT, 'work', 'game')
 RT_DIALOG = 5
 CLASSES = {0x80: 'Button', 0x81: 'Edit', 0x82: 'Static', 0x83: 'ListBox',
            0x84: 'ScrollBar', 0x85: 'ComboBox'}
@@ -113,8 +114,8 @@ def _selftest():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('--exe', default=os.path.join(ROOT, 'game', 'gamemd.exe'))
-    ap.add_argument('--out', default=os.path.join(ROOT, 'work', 'dialogs.json'))
+    ap.add_argument('--exe', default=os.path.join(GAME, 'gamemd.exe'))
+    ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'lift', 'dialogs.json'))
     ap.add_argument('--show', help='print one dialog, e.g. 0x100')
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()

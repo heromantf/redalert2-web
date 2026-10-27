@@ -1898,9 +1898,7 @@ def demo():
 def main(argv=None):
     import argparse, json, os, sys
 
-    # Allow running both as `python -m tools.disasm.disasm32` and as a loose script.
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "pe"))
-    from pe_analyze import analyze_pe, build_iat_map  # noqa: E402
+    from pe_analyze import analyze_pe, build_iat_map  # noqa: E402  (beside this file, lift/)
 
     ap = argparse.ArgumentParser(
         description="Recursive-descent x86-32 disassembler + function recovery (pcrecomp).")
