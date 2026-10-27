@@ -507,6 +507,27 @@ def desync_fix_patches(target):
     return p
 
 
+def online_patches(target):
+    """CnCNet's fixes for online play (refs/yr-patches, refs/yrpp-spawner), redone here.
+
+    Waiting for the other players (0x648710, Queue.CPP's: a game's start, all
+    loaded; or in a game, another's events late, then the "waiting for
+    connections" dialog) loops back from 0x649851 to 0x6488B0 at once, a core
+    spinning the whole wait. CnCNet sleeps 3 ms there first (yr-patches'
+    online_optimizations.asm, the spawner's WaitForPlayers_OnlineOptimizations):
+    at most 333 rounds a second. The rounds count for nothing in the game's
+    state (its timers and the packets do), so it cannot unsync."""
+    if target != 'gamemd':
+        return {}
+    keep = 'uint32_t _da = eax, _dc = ecx, _dd = edx; '
+    back = 'eax = _da, ecx = _dc, edx = _dd; '
+    tag = ' /* online: run_lift.py online_patches */'
+    return {
+        0x00649851: ('@replace:{ ' + keep + 'PUSH32(esp, 3u); RECOMP_ICALL(MEM32(0x7E11F0u)); /* Sleep(3) */ ' + back + '} '
+                     'goto L_006488B0; /* 0x00649851: jmp 0x6488b0 */' + tag),
+    }
+
+
 def apply_patches(body, patches):
     """Add each patch's C after the line that lifts its instruction."""
     for va, c in patches.items():
@@ -542,7 +563,7 @@ def targets():
                        title="Yuri's Revenge", game_frame=0x00A8ED84, stamp=0x3BDF544E,
                        patches=lambda code, cs: {**sidebar_rows_patches(code, cs), **HD_VOXEL_PATCHES,
                                                  **modern_controls_patches('gamemd'), **queue_five_patches('gamemd'),
-                                                 **clip_line_patches('gamemd'), **desync_fix_patches('gamemd')}),
+                                                 **clip_line_patches('gamemd'), **desync_fix_patches('gamemd'), **online_patches('gamemd')}),
         'game': dict(exe=os.path.join(_GAME, 'game.exe'),
                      catalog=os.path.join(_LIFT, 'game', 'functions.json'),
                      seeds=os.path.join(_LIFT, 'game', 'rtti_seeds.json'),
