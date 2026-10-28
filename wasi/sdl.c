@@ -42,7 +42,8 @@ void SDL_QuitSubSystem(Uint32 flags) { (void)flags; }
  * the samples, interleaved 16-bit. write and read count frames for ever
  * (wrapping at 2^32); a frame's place is its count & (frames - 1). */
 #define RING_FRAMES 16384          /* ~370 ms at 44.1 kHz */
-#define TARGET      4096           /* mixed ahead of the speakers: ~93 ms */
+#define TARGET      4096           /* mixed ahead of the speakers: ~93 ms (RA2WEB_AUDIO_AHEAD: another, to measure) */
+static uint32_t g_target = TARGET;
 typedef struct {
     uint32_t write;                /* 0: frames mixed into the ring (this thread) */
     uint32_t read;                 /* 1: frames played from it (the worklet) */
@@ -88,7 +89,7 @@ static void *audio_thread(void *arg) {
         if (r && __atomic_load_n(&r->active, __ATOMIC_ACQUIRE)) {
             uint32_t w = r->write, fill = w - __atomic_load_n(&r->read, __ATOMIC_ACQUIRE);
             if (fill > RING_FRAMES) fill = RING_FRAMES;  /* the worklet ran ahead (an underrun): count from what it read */
-            if (fill + (uint32_t)frames > TARGET) { sleep_s((double)(fill + frames - TARGET) / g_dev.spec.freq + 0.001); continue; }
+            if (fill + (uint32_t)frames > g_target) { sleep_s((double)(fill + frames - g_target) / g_dev.spec.freq + 0.001); continue; }
             mix(buf, bytes);
             const int16_t *in = (const int16_t *)buf;
             for (int i = 0; i < frames; i++) {
@@ -116,6 +117,11 @@ SDL_AudioDeviceID SDL_OpenAudioDevice(const char *device, int iscapture, const S
         return 0;
     }
     g_dev.spec = *desired;
+    const char *ahead = getenv("RA2WEB_AUDIO_AHEAD");      /* frames, a block (desired->samples) and a quantum more at least */
+    if (ahead && atoi(ahead) >= desired->samples + 128 && atoi(ahead) <= RING_FRAMES / 2) {
+        g_target = (uint32_t)atoi(ahead);
+        fprintf(stderr, "[audio] mixed ahead: %u frames\n", g_target);
+    }
     g_dev.spec.silence = 0;
     g_dev.spec.size = (Uint32)desired->samples * desired->channels * 2;
     if (obtained) *obtained = g_dev.spec;

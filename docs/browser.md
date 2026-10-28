@@ -480,3 +480,23 @@ than a page, so the rows moving was not seen.
   button, or the tests' `&go`) and lets it go as the game ends; an import or
   an export takes it while it lasts. Another page's: "这个存档正在另一个页面里使用",
   the game not started, nothing imported or exported.
+
+**The sound's lead, measured (2026-10-28).** `wasi/sdl.c` mixes a block of
+1,024 frames (dsound.c's) whenever the ring holds less than its lead, 4,096
+frames: 70 to 93 ms between the mixer and the speakers, besides the game's
+own DirectSound buffer (blocks of 11,264 bytes, 64 ms) and the output's.
+`RA2WEB_AUDIO_AHEAD` (frames) sets another lead, to measure. The scripted
+skirmish at 1920x1080 in Chrome, ~3 minutes each, the timer this Mac's
+(fine) and Windows' simulated (`RA2WEB_TIMER_MS=15.625`, a 1 ms wait woken
+9-12 ms late), short quanta (underruns) counted:
+
+| lead (frames) | in the ring | fine timer | coarse timer |
+|---|---|---|---|
+| 4096 (the default) | 70-93 ms | 0 | 0 |
+| 3072 | 46-70 ms | 0 | 0 |
+| 2048 | 23-46 ms | 0 | 40 |
+| 1536 | 12-35 ms | 2 | 10,237 |
+
+The lead stays 4,096 (the user's choice); 3,072 would take 23 ms off at no
+cost seen on either timer, 2,048 46 ms on this Mac but not on Windows' timer.
+Not tried on a real Windows machine.
