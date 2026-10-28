@@ -337,6 +337,20 @@ static void machine_path(void) {
     hle_guest_env_path = path;
 }
 
+/* The page's time zone (RA2WEB_TZ: minutes east of UTC, the browser's offset now, as
+ * web/process.js and host/run.mjs give it): WASI's C library has none and keeps local
+ * time at UTC, so saves were dated in UTC (8 hours early in China). win32hle's
+ * GetLocalTime, file times and GetTimeZoneInformation take it (hle_tz_minutes). The offset
+ * of the page's start throughout, as Windows' FileTimeToLocalFileTime takes the one of now. */
+static void time_zone(void) {
+    const char *tz = getenv("RA2WEB_TZ");
+    char *end = NULL;
+    long m = tz && *tz ? strtol(tz, &end, 10) : 0;
+    if (!tz || !*tz || *end || m < -16 * 60 || m > 16 * 60) return;
+    hle_tz_minutes = (int)m;
+    fprintf(stderr, "[host] time zone: UTC%c%ld:%02ld\n", m < 0 ? '-' : '+', labs(m) / 60, labs(m) % 60);
+}
+
 static uint32_t exe_stamp(const char *path) {
     uint8_t head[4096] = { 0 };
     FILE *f = fopen(path, "rb");
@@ -410,6 +424,7 @@ int main(int argc, char **argv) {
     allow_hires();
     player_name();
     machine_path();
+    time_zone();
     ra2web_net_start();                          /* the virtual LAN, if the page joins one (net.c) */
     hle_screen_cursor_hook = menus_use_windows_cursor;
     if (hle_screen_open(RA2_TITLE, 0, 0) != 0) return 1;

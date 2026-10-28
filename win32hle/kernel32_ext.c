@@ -236,10 +236,17 @@ static void k_GetSystemTime(void) {
     put_systemtime(A32(0), &t, (int)(ts.tv_nsec / 1000000));
     RETV(1);
 }
+int hle_tz_minutes = HLE_TZ_HOST;
+void hle_localtime(long long unix_s, struct tm *out) {
+    if (hle_tz_minutes == HLE_TZ_HOST) { time_t s = (time_t)unix_s; localtime_r(&s, out); return; }
+    time_t s = (time_t)(unix_s + (long long)hle_tz_minutes * 60);
+    gmtime_r(&s, out);
+    out->tm_gmtoff = (long)hle_tz_minutes * 60;
+}
 static void k_GetLocalTime(void) {
     struct timespec ts; struct tm t;
     clock_gettime(CLOCK_REALTIME, &ts);
-    localtime_r(&ts.tv_sec, &t);
+    hle_localtime(ts.tv_sec, &t);
     put_systemtime(A32(0), &t, (int)(ts.tv_nsec / 1000000));
     RETV(1);
 }
@@ -265,7 +272,7 @@ static void k_SystemTimeToFileTime(void) {               /* (&st, &ft) */
     RET(1, 2);
 }
 static int32_t tz_bias_s(void) {                         /* local - UTC, seconds */
-    time_t now = time(NULL); struct tm t; localtime_r(&now, &t);
+    struct tm t; hle_localtime(time(NULL), &t);
     return (int32_t)t.tm_gmtoff;
 }
 static void k_FileTimeToLocalFileTime(void) { put_ft(A32(1), get_ft(A32(0)) + (int64_t)tz_bias_s() * 10000000); RET(1, 2); }

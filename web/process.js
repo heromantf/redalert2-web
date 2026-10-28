@@ -52,7 +52,8 @@ export async function startProcess({ wasmUrl, args, env = {}, pool = 16, save = 
   const ctl = new Int32Array(ctlBuf);
   ctl[CTL_NEXT_TID] = 1;
   pool = Math.min(pool, MAX_THREADS);
-  const cfg = { args: ['ra2', ...args], env };
+  // RA2WEB_TZ: the browser's time zone, minutes east of UTC (WASI's C library has none: wasi/main.c)
+  const cfg = { args: ['ra2', ...args], env: { RA2WEB_TZ: String(-new Date().getTimezoneOffset()), ...env } };
   log(`[host] ${navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0] ?? navigator.userAgent}: ${wasmUrl} ${(bytes.length / 1048576).toFixed(1)} MB ` +
       `fetched in ${fetchMs.toFixed(0)} ms, compiled in ${compileMs.toFixed(0)} ms; memory ${lim.min * 64 / 1024} MB of ${lim.max * 64 / 1024} MB; ${pool} threads`);
 

@@ -285,6 +285,13 @@ int  hle_dd_frame(const uint8_t **px, int *w, int *h, int *pitch, int *bpp, cons
 void hle_dd_mode(int *w, int *h, int *bpp);
 extern void (*hle_dd_primary_hook)(void);            /* the primary's pixels or palette changed (a blit, an Unlock, a Flip) */
 extern const char *hle_guest_env_path;              /* the guest's PATH (kernel32_crt.c), set before it starts; NULL: C:\WINDOWS\SYSTEM32;C:\WINDOWS */
+/* The local time's offset east of UTC, in minutes (kernel32_ext.c), set by a host whose C
+ * library knows no time zone (WASI's: UTC) before the guest starts; HLE_TZ_HOST: the C library's.
+ * hle_localtime: the local time of a moment, by it, for GetLocalTime, the file times and the CRT. */
+#define HLE_TZ_HOST (-100000)
+extern int hle_tz_minutes;
+struct tm;
+void hle_localtime(long long unix_s, struct tm *out);
 int  hle_dd_surface_pixels(uint32_t obj, uint8_t **px, int *w, int *h, int *pitch, int *bpp);   /* 0: not a surface */
 void hle_dsound_set_master(float gain);              /* 0 mutes */
 void hle_dsound_register_com(void);                  /* CoCreateInstance(CLSID_DirectSound) (recomp_host_init) */

@@ -425,3 +425,18 @@ screen kept the message box (its checksum the same for as long as it was left:
 600 to 1,100 frames) though the game went on (Back and Resume Mission, clicked
 blind, worked); the build before these fixes did the same. Now the list of
 saves is drawn again at once, after Esc as after 否.
+
+**The local time (2026-10-28).** WASI's C library has no time zone: its
+`localtime_r` is UTC whatever `TZ` says (a test with wasmtime: `CST-8`,
+`LOC-8:00` and a DST rule all came out UTC), so the game's local time was
+UTC: its saves were dated 8 hours early in China (Delete Game's list showed
+10/27 8:13 PM at 04:13 on 10/28). The page gives the browser's offset now
+(`RA2WEB_TZ`, minutes east of UTC: `web/process.js`; under Node
+`host/run.mjs` gives the machine's), `wasi/main.c` hands it to win32hle
+(`hle_tz_minutes`), and its three ways to local time (GetLocalTime, the file
+times' and GetTimeZoneInformation's bias, the CRT's date and time formats)
+take it through `hle_localtime`; a native host sets none and keeps its C
+library's. The offset of the page's start throughout, as Windows'
+FileTimeToLocalFileTime takes the one of now. Checked in Chrome: "[host]
+time zone: UTC+8:00", and a save made at 5:27 AM listed at 10/28/2026 5:27:51
+AM.

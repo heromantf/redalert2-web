@@ -61,6 +61,7 @@ if (relay) Object.assign(env, { RA2WEB_NET: '1', RA2WEB_NAME: name });
 // one page per browser, and the guest's PATH (wasi/main.c machine_path)
 const clientId = client ?? `node-${crypto.randomUUID()}`;
 env.RA2WEB_MACHINE ??= clientId;
+env.RA2WEB_TZ ??= String(-new Date().getTimezoneOffset());   // this machine's time zone, as the page gives the browser's (wasi/main.c)
 
 // The memory the module imports (env.memory): its limits, from the import section
 // (the JS API does not tell a module's declared minimum).
