@@ -1,12 +1,15 @@
 #!/usr/bin/env node
-// The local server for the browser build: this checkout's pages and host code,
-// the game module, and the game data, on 127.0.0.1 only.
-//   node web/server.mjs [--port 8780] [--data DIR] [--throttle KBPS[,MS]] [--drop N] [--log-data]
-//     /                        the game's page (/web/play.html)
+// The server for the browser build: this checkout's pages and host code, the
+// game module, and the game data; on 127.0.0.1 unless --host says otherwise.
+//   node web/server.mjs [--port 8780] [--host 127.0.0.1] [--public] [--relay URL] [--data DIR]
+//                       [--throttle KBPS[,MS]] [--drop N] [--log-data]
+//     /                        the game's page (/web/play.html), the query kept, and --relay's URL
+//                              for its relay where the query gives none (the site's own relay)
 //     /web/...                 web/ (the pages, their workers)
 //     /host/...                host/ (the hosts' shared core: proto.mjs, core/)
 //     /spike/...               spike/ (measurements that need a page)
-//     /out/ra2.wasm            the WASI build (wasi/build.sh)
+//     /out/ra2.wasm            the WASI build (wasi/build.sh); ?v=VERSION, its version
+//     /out/ra2.wasm.version    that version (its size and mtime): web/process.js asks it first
 //     /data/manifest.json      every file and folder of DIR: { files: [{ p, s, m, d }] } (path, size, mtime ms, folder)
 //     /data/<path>             a file of DIR, with byte ranges (206)
 //     /blocks/<path>?b=F&n=N&s=SIZE&m=MTIME
@@ -24,6 +27,13 @@
 // gzip (120 MB in 13), compressed once a build.
 // Every answer is cross-origin isolated (COOP same-origin, COEP require-corp:
 // SharedArrayBuffer needs both).
+// --public: for others, behind a CDN (Cloudflare): only what a player's page
+// needs (web/ but its tests, host/, out/ra2.wasm, the game data), and the
+// answers that never change cacheable by it for a year (immutable): a run of
+// blocks asked with its file's size and mtime, the module asked with its
+// version. The page's own OPFS keeps the data all the same; the CDN keeps the
+// friends after the first from this machine's upload. Not behind a CDN of one's
+// own, the module and the blocks are cached by the browser alike.
 // Tests of a slow network: --throttle KBPS[,MS] holds all the answers together
 // to KBPS kilobytes a second (one link), each MS later; --drop N cuts every Nth
 // answer of game data (/blocks/, /data/) halfway. --log-data: a line for each
@@ -37,13 +47,25 @@ import zlib from 'node:zlib';
 const WEB = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const av = process.argv.slice(2);
 const opt = (name, def) => { const i = av.indexOf(name); return i >= 0 && i + 1 < av.length ? av[i + 1] : def; };
-const PORT = +opt('--port', 8780);
+const PORT = +opt('--port', 8780), HOST = opt('--host', '127.0.0.1'), PUBLIC = av.includes('--public'), RELAY = opt('--relay', '');
 const DATA = path.resolve(opt('--data', path.join(WEB, 'work/game')));
 const [KBPS, LATENCY = 0] = (opt('--throttle', '') || '0').split(',').map(Number);
 const DROP = +opt('--drop', 0);
 const LOG_DATA = av.includes('--log-data');
 const logData = (full, what) => LOG_DATA && console.log(`[data-req] ${path.relative(DATA, full)} ${what}`);
 const ROOTS = { web: path.join(WEB, 'web'), host: path.join(WEB, 'host'), out: path.join(WEB, 'out'), spike: path.join(WEB, 'spike') };
+const MODULE = path.join(ROOTS.out, 'ra2.wasm');
+const YEAR = 'public, max-age=31536000, immutable';
+// --public: what a player's page needs, and nothing else of the checkout (out/'s lift, objects, relay)
+function served(top, full) {
+  if (!PUBLIC) return true;
+  if (top === 'web') return !full.startsWith(path.join(ROOTS.web, 'tests') + path.sep);
+  return top === 'host' || (top === 'out' && full === MODULE);
+}
+function moduleVersion() {
+  const st = fs.statSync(MODULE);
+  return `${st.size.toString(16)}-${Math.round(st.mtimeMs).toString(16)}`;
+}
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.wasm': 'application/wasm', '.json': 'application/json', '.css': 'text/css', '.png': 'image/png' };
 const BLOCK = 1 << 20, RUN_MAX = 16;
@@ -158,6 +180,7 @@ async function blocks(req, res, full, q) {
   const b = Number(q.get('b')), n = Number(q.get('n') ?? 1), s = q.get('s'), mt = q.get('m');
   if (!Number.isInteger(b) || !Number.isInteger(n) || b < 0 || n < 1 || n > RUN_MAX) return plain(res, 400, 'b, n: blocks');
   if ((s !== null && Number(s) !== st.size) || (mt !== null && Number(mt) !== Math.round(st.mtimeMs))) return plain(res, 409, 'the file changed');
+  const lasting = PUBLIC && s !== null && mt !== null;      // these bytes, at this URL, for as long as the file is this one
   const start = b * BLOCK;
   if (start >= st.size) return send(res, 416, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }, '');
   logData(full, `blocks ${b}+${n}`);
@@ -168,19 +191,23 @@ async function blocks(req, res, full, q) {
     const c = await compressors.block[enc](raw);
     if (c.length < raw.length * 0.97) { body = c; h = { 'Content-Encoding': enc }; }
   }
-  return send(res, 200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store', Vary: 'Accept-Encoding', ...h }, body, { data: true, head: req.method === 'HEAD' });
+  return send(res, 200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': lasting ? YEAR : 'no-store', Vary: 'Accept-Encoding', ...h },
+    body, { data: true, head: req.method === 'HEAD' });
 }
 
 // the pages, scripts and the module: revalidated, the module compressed once a build
 const packed = new Map();            // full|mtime|encoding -> Promise<Buffer>
-async function siteFile(req, res, full) {
+async function siteFile(req, res, full, q) {
   let st;
   try { st = fs.statSync(full); } catch { return plain(res, 404, 'not found'); }
   if (!st.isFile()) return plain(res, 404, 'not a file');
   const ext = path.extname(full).toLowerCase(), type = TYPES[ext] ?? 'application/octet-stream';
   const enc = ext === '.wasm' ? encoding(req, 'module') : null;
   const etag = `"${st.size.toString(16)}-${Math.round(st.mtimeMs).toString(16)}${enc ? '-' + enc : ''}"`;
-  const h = { 'Content-Type': type, 'Cache-Control': 'no-cache', ETag: etag, ...(ext === '.wasm' ? { Vary: 'Accept-Encoding' } : {}) };
+  // the module asked by its version (web/process.js): for a year where it is today's, never where it is not
+  const v = full === MODULE ? q.get('v') : null, version = v === null ? null : moduleVersion();
+  const cache = v === null ? 'no-cache' : v === version ? (PUBLIC ? YEAR : 'no-cache') : 'no-store';
+  const h = { 'Content-Type': type, 'Cache-Control': cache, ETag: etag, ...(ext === '.wasm' ? { Vary: 'Accept-Encoding' } : {}) };
   if (req.headers['if-none-match'] === etag) { if (LATENCY) await sleep(LATENCY); res.writeHead(304, h); return res.end(); }
   let body = await fs.promises.readFile(full);
   if (enc) {
@@ -208,19 +235,25 @@ const server = http.createServer(async (req, res) => {
     let url;
     try { url = new URL(req.url, 'http://localhost'); } catch { return await plain(res, 400, 'bad url'); }
     const p = decodeURIComponent(url.pathname);
-    if (p === '/') { res.writeHead(302, { Location: '/web/play.html', 'Cache-Control': 'no-store' }); return res.end(); }
+    if (p === '/') {
+      const q = new URLSearchParams(url.search);
+      if (RELAY && !q.has('relay')) q.set('relay', RELAY);
+      res.writeHead(302, { Location: `/web/play.html${q.size ? `?${q}` : ''}`, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
     if (p === '/data/manifest.json') return await send(res, 200, { 'Content-Type': TYPES['.json'], 'Cache-Control': 'no-store' }, JSON.stringify(manifest()));
+    if (p === '/out/ra2.wasm.version') return await plain(res, 200, moduleVersion());
     const [, top, rest = ''] = /^\/([^/]+)\/?(.*)$/.exec(p) ?? [];
     const root = top === 'data' || top === 'blocks' ? DATA : ROOTS[top];
     const full = root && within(root, rest);
-    if (!full) return await plain(res, 404, 'not found');
+    if (!full || (root !== DATA && !served(top, full))) return await plain(res, 404, 'not found');
     if (top === 'blocks') return await blocks(req, res, full, url.searchParams);
     if (top === 'data') return await dataFile(req, res, full);
-    return await siteFile(req, res, full);
+    return await siteFile(req, res, full, url.searchParams);
   } catch (x) {
     console.error(`[server] ${req.url}: ${x?.stack ?? x}`);
     if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('server error'); } else res.destroy();
   }
 });
-server.listen(PORT, '127.0.0.1', () => console.log(`[server] http://127.0.0.1:${PORT}/  data ${DATA}` +
+server.listen(PORT, HOST, () => console.log(`[server] http://${HOST}:${PORT}/  data ${DATA}${PUBLIC ? '  (public: for others, behind a CDN)' : ''}${RELAY ? `  relay ${RELAY}` : ''}` +
   `${KBPS ? `  (a slow link: ${KBPS} KB/s, ${LATENCY} ms)` : ''}${DROP ? `  (every ${DROP}th answer of data cut)` : ''}`));

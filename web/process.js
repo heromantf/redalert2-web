@@ -38,6 +38,10 @@ export async function startProcess({ wasmUrl, args, env = {}, pool = 16, save = 
   const log = (s) => onLog(s, 2, -1);
   if (!crossOriginIsolated) throw new Error('the page is not cross-origin isolated: no SharedArrayBuffer');
   let t0 = performance.now();
+  // the module by its version (web/server.mjs: URL.version), so that a cache in between (a CDN's, the
+  // browser's) may keep it for good; a server without one has the plain URL
+  const version = await fetch(`${wasmUrl}.version`, { cache: 'no-store' }).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+  if (version && /^[0-9a-f]+-[0-9a-f]+$/.test(version)) wasmUrl = `${wasmUrl}?v=${version}`;
   const bytes = new Uint8Array(await (await fetch(wasmUrl)).arrayBuffer());
   const fetchMs = performance.now() - t0;
   const build = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].slice(0, 8)
