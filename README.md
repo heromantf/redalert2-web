@@ -27,8 +27,9 @@ copy of the game; nothing of it is in this repository.
   not yet between real machines or over the internet.
 - **Headless** under Node too: the test suite (`tools/playtest.py`, every menu
   and game mode, 37 cases) runs there.
-- Not yet: serving the page to others (it needs HTTPS), Windows as a build
-  machine.
+- **For others**: `docs/deploy.md` (the site behind Cloudflare, the relay by
+  a name or an IP address alone); each step checked on this Mac, not yet
+  between real machines. Not yet: Windows as a build machine.
 
 ## What it takes
 
@@ -131,6 +132,7 @@ This builds on others' work (what came from where, and the licenses: `NOTICE.md`
 
 - `AGENTS.md`: how to work on this: the rules, and what to run after which
   change.
+- `docs/deploy.md`: serving it to your friends.
 - `NOTICE.md`: what came from others (pcrecomp, redalert2-recomp, nfsu2-web,
   the wrappers' filters, FFmpeg...) and on what terms. *Red Alert 2* and
   *Yuri's Revenge* are © Westwood Studios / Electronic Arts.
