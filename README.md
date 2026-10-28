@@ -100,6 +100,33 @@ it has the game data (the start panel's download, movies optional).
 Not committed: the game (`work/`), the lift and the build (`out/`), the
 toolchains (`deps/`), caches (`.cache/`, `.venv/`).
 
+## Credits
+
+This builds on others' work (what came from where, and the licenses: `NOTICE.md`):
+
+- [pcrecomp](https://github.com/sp00nznet/pcrecomp) and
+  [redalert2-recomp](https://github.com/sp00nznet/redalert2-recomp) by sp00nz:
+  the lifter, win32hle and recomp32, and the Red Alert 2 lift's
+  configuration, patches and play tests all started there.
+- [nfsu2-web](https://github.com/th0mk/nfsu2-web) by th0mk (portions Talha
+  Müderrisoğlu): the browser host's design (the process, the game's thread
+  workers, the I/O protocol, the game data's block cache and download ahead).
+- [CnCNet](https://github.com/CnCNet): what
+  [yrpp-spawner](https://github.com/CnCNet/yrpp-spawner) and
+  [yr-patches](https://github.com/CnCNet/yr-patches) found (the desync, crash
+  and online fixes, Protocol Zero, the game's own bugs), written anew here;
+  [YRpp](https://github.com/CnCNet/YRpp) for the game's structures and
+  addresses.
+- The Steam release's two wrappers,
+  [DDrawCompat](https://github.com/narzoul/DDrawCompat) by narzoul and
+  [cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw) by FunkyFr3sh: the
+  screen filters (with MJP's Catmull-Rom and Hyllian's lanczos2 and xBR
+  shaders, through cnc-ddraw), the settings and the stats.
+- IPXEmu by Jelle Geerts: IPX over UDP, the same bytes on the wire.
+- [FFmpeg](https://ffmpeg.org) (Bink and MP3),
+  [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) and
+  [coder/websocket](https://github.com/coder/websocket).
+
 ## More
 
 - `AGENTS.md`: how to work on this: the rules, and what to run after which
