@@ -7,7 +7,20 @@
 //   exportSaves(set)            -> Blob, a zip (deflated: Chrome's CompressionStream)
 //   readSaves(blob)             -> [{ name, data }], the zip's saves, in a folder of it or not (others left out)
 //   writeSaves(set, entries)    the saves written, the same names replaced
+//   claimSaves(set) -> release | null   the save set this page's alone (null: another page has it)
 export const SAVE_RE = /^SAVE[0-9A-F]{4}\.SAV$/i;
+
+// A save set is one page's at a time, a Web Lock (as online.js keeps online play one page's): two
+// pages of the game on one folder would open its files at once (an OPFS file has one writer: the
+// second's writes fail), and an import or an export beside a running game would meet it half-written.
+// The lock is held until release() (or the page goes).
+export function claimSaves(set) {
+  if (!navigator.locks) return Promise.resolve(() => {});
+  return new Promise((res) => navigator.locks.request(`ra2web-save:${set}`, { ifAvailable: true }, (lock) => {
+    if (!lock) { res(null); return null; }
+    return new Promise((release) => res(release));
+  }));
+}
 
 const dir = async (set) => (await navigator.storage.getDirectory()).getDirectoryHandle(set, { create: true });
 

@@ -457,7 +457,7 @@ window's 0x7775C0, three up +120 (a log, taken out after). Its sidebar was
 empty there, and the allied campaign's first mission had no tab of more
 than a page, so the rows moving was not seen.
 
-**Cmd and the page's log (2026-10-28).**
+**Cmd, the page's log and the saves' lock (2026-10-28).**
 - **Cmd** (Meta; the Windows key elsewhere) is the browser's and the
   system's: a key pressed with it goes to them as it is (Cmd+C copies, Cmd+R
   reloads), not to the game, and Cmd going down lets go of the keys held:
@@ -472,3 +472,11 @@ than a page, so the rows moving was not seen.
   leaves it to be had. The log over the picture (a click on the bar) is added
   to a line at a time, the last 500, so a selection in it stays to be copied:
   it was all written again twice a second, and Cmd+C was the page's.
+- **The saves' lock** (`web/saves.js` `claimSaves`): a save set is one
+  page's at a time, a Web Lock as online play's (`online.js`): two pages on
+  one folder would open its files at once (an OPFS file has one writer: the
+  second page's writes fail), and an import or an export beside a running game
+  would meet it half-written. The page takes it as its game starts (the play
+  button, or the tests' `&go`) and lets it go as the game ends; an import or
+  an export takes it while it lasts. Another page's: "这个存档正在另一个页面里使用",
+  the game not started, nothing imported or exported.

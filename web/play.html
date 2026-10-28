@@ -125,7 +125,7 @@ import { startPresenter } from './presenter.js';
 import { startInput } from './input.js';
 import { startAudio } from './audio.js';
 import { predownload } from './predownload.js';
-import { exportSaves, listSaves, readSaves, writeSaves } from './saves.js';
+import { claimSaves, exportSaves, listSaves, readSaves, writeSaves } from './saves.js';
 import { pageLog } from './page-log.js';
 import { cacheBusy, deleteCache } from './data-cache.js';
 import { manifestFiles, movieFiles } from './game-files.js';
@@ -311,6 +311,13 @@ $('lognow').onclick = () => plog.download();
 $('logcopy').onclick = async () => { $('loghint').textContent = (await plog.copy()) ? '已复制到剪贴板' : '浏览器不让复制，用下载吧'; };
 // the saves, out of this browser and back (saves.js), while the game is not running (the panel is up)
 const saveSet = q.get('save') ?? 'ra2yr';
+const BUSY = '这个存档正在另一个页面里使用：先关掉那个页面里的游戏';
+let saveLock = null;                             // the save set this page's (saves.js claimSaves): while its game runs
+async function withSaves(fn) {                   // an import or export: the set this page's meanwhile
+  const release = await claimSaves(saveSet);
+  if (!release) { alert(`${BUSY}，再导入或导出。`); return; }
+  try { return await fn(); } finally { release(); }
+}
 async function savesLine() {
   try {
     const s = await listSaves(saveSet);
@@ -318,27 +325,27 @@ async function savesLine() {
     $('savesout').disabled = !s.length;
   } catch (x) { $('saveshint').textContent = `读不到存档：${x.message}`; }
 }
-$('savesout').onclick = async () => {
+$('savesout').onclick = () => withSaves(async () => {
   const blob = await exportSaves(saveSet), a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `ra2-saves-${new Date().toISOString().slice(0, 10)}.zip`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   log(`[save] exported ${(await listSaves(saveSet)).length} saves, ${blob.size} bytes`);
-};
+});
 $('savesin').onclick = () => $('savesfile').click();
 $('savesfile').onchange = async () => {
   const f = $('savesfile').files[0];
   $('savesfile').value = '';
   if (!f) return;
-  try {
+  await withSaves(async () => { try {
     const got = await readSaves(f);
     if (!got.length) { alert('这个 zip 里没有存档（SAVE 开头、.SAV 结尾的文件）'); return; }
     const have = new Set((await listSaves(saveSet)).map((s) => s.name.toUpperCase())), same = got.filter((e) => have.has(e.name));
     if (same.length && !confirm(`导入 ${got.length} 个存档，其中 ${same.length} 个会替换这里同名的存档（${same.map((e) => e.name).join('、')}）。继续？`)) return;
     await writeSaves(saveSet, got);
     log(`[save] imported ${got.length} saves (${same.length} replaced)`);
-  } catch (x) { alert(`导入失败：${x.message}`); }
+  } catch (x) { alert(`导入失败：${x.message}`); } });
   savesLine();
 };
 // online play needs the game data here first (online.js onlineData): the hint under the relay's
@@ -366,6 +373,11 @@ $('play').onclick = async () => {
     $('playhint').classList.add('warn');
     return;
   }
+  if (!(saveLock ??= await claimSaves(saveSet))) {   // first: the click's moment is short, the lock a few ms
+    $('playhint').textContent = `${BUSY}，再开始。`;
+    $('playhint').classList.add('warn');
+    return;
+  }
   if ($('full').checked) screen.enter();        // within the click: a browser allows it no later
   $('play').disabled = true;
   resume = pd.running();
@@ -374,6 +386,7 @@ $('play').onclick = async () => {
   play();
 };
 function ended(code) {
+  saveLock?.(); saveLock = null;
   if (immediate) return;
   over = true;
   $('title').textContent = `游戏已结束（退出码 ${code}）`;
@@ -396,7 +409,11 @@ async function downloadFirst() {
     if (n % 50 === 0) { const s = pd.state(); log(`[predownload] ${s.phase}: ${Math.round(s.have / 1048576)} of ${Math.round(s.total / 1048576)} MB${s.file ? `, ${s.file}` : ''}; the worker last heard ${(pd.silentFor() / 1000).toFixed(1)} s ago`); }
   }
 }
-if (immediate) { if (q.has('download')) await downloadFirst(); play(); }
+if (immediate) {
+  if (q.has('download')) await downloadFirst();
+  if ((saveLock = await claimSaves(saveSet))) play();
+  else { log(`[save] the save set "${saveSet}" is another page's: the game not started`); document.title = 'EXIT -1'; }
+}
 else {
   $('start').hidden = false;
   $('movies').checked = q.has('movies') || localStorage.getItem('ra2web.movies') === '1';
