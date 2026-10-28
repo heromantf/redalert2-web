@@ -75,6 +75,7 @@
 #define WM_CTLCOLORMSGBOX  0x0132u
 #define WM_CTLCOLORSTATIC  0x0138u
 #define WM_MOUSEMOVE       0x0200u
+#define WM_MOUSEWHEEL      0x020Au
 #define WM_LBUTTONDOWN     0x0201u
 #define WM_LBUTTONUP       0x0202u
 #define WM_LBUTTONDBLCLK   0x0203u
@@ -737,6 +738,13 @@ void hle_input_key(int down, uint32_t vk, uint32_t scan) {
     uint32_t l = 1u | (scan & 0xFFu) << 16 | (alt ? 1u << 29 : 0) | (down ? 0 : 3u << 30);
     if (t) q_push(t, alt || vk == VK_MENU || vk == 0x79 ? (down ? WM_SYSKEYDOWN : WM_SYSKEYUP) : (down ? WM_KEYDOWN : WM_KEYUP), vk, l);
 }
+/* The wheel, to the window with the focus, as Windows sends it: the delta in the high word of
+ * wParam (positive away from the user), the keys' state in the low, the cursor in lParam. A window
+ * that does not take it passes it to its parent (def_proc). */
+void hle_input_wheel(int delta, int sx, int sy) {
+    uint32_t t = hle_focus_window();
+    if (t) q_push(t, WM_MOUSEWHEEL, ((uint32_t)delta & 0xFFFFu) << 16 | mk_state(), ((uint32_t)(sy & 0xFFFF) << 16) | (uint32_t)(sx & 0xFFFF));
+}
 void hle_input_cursor(int sx, int sy) { g_cursor_x = sx, g_cursor_y = sy; }
 void hle_input_key_state(uint32_t vk, int down) { if (down) g_keys[vk & 0xFF] |= 0x80; else g_keys[vk & 0xFF] &= 1; }
 
@@ -765,6 +773,7 @@ static uint32_t def_proc(uint32_t h, uint32_t m, uint32_t w, uint32_t l) {
     case WM_SETFONT: x->font = w; return 0;
     case WM_GETFONT: return x->font;
     case WM_MOUSEACTIVATE: return 1;                     /* MA_ACTIVATE */
+    case WM_MOUSEWHEEL: return x->parent ? hle_send(x->parent, m, w, l) : 0;   /* up to the parent, as Windows' */
     case WM_SETCURSOR: return 0;
     case WM_SYSCOMMAND: if ((w & 0xFFF0u) == 0xF060u) hle_send(h, WM_CLOSE, 0, 0); return 0;   /* SC_CLOSE */
     case WM_CTLCOLORMSGBOX: case 0x0133: case 0x0134: case 0x0135: case 0x0136: case 0x0137: case WM_CTLCOLORSTATIC:

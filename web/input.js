@@ -3,13 +3,17 @@
 // presenter turns SDL's events into the window messages a game gets.
 //   ring: Int32 words 0 head (the page's), 1 tail (the pump's), then 256
 //   events of 4 words: { 1, message, x, y } a mouse message at game pixels,
-//   { 2, down, vk, scan } a key.
+//   { 2, down, vk, scan } a key, { 3, delta, x, y } the wheel (WHEEL_DELTA units, + away).
 // Keys: the browser's KeyboardEvent.code to a Windows virtual key and a set-1
 // scan code, the same table as runtime/win32hle/screen.c's vk_of and scan_of.
 // Keys are taken from the whole window (the page is the game's: no need for the
 // canvas to have the focus, which a page loaded without a click does not give
 // it), except those meant for a text field. Keys held when the window loses
-// the focus are let go, or they would stay down. The page takes the keys that
+// the focus are let go, or they would stay down. Cmd (Meta: the Windows key
+// elsewhere) is the browser's and the system's: a key pressed with it is theirs
+// (Cmd+C, Cmd+R, Cmd+Tab), never the game's, and its going down lets go of the
+// keys held, as macOS sends no key-up for a key let go while Cmd is down
+// (nfsu2-web does the same). The page takes the keys that
 // are its own first (onKey(e, down) -> true: Alt+Enter, Shift+F11, the menu's keys:
 // settings.js), and they never reach the game.
 // The mouse, kept in the picture as cnc-ddraw keeps it (its wndproc.c and
@@ -166,6 +170,19 @@ export function startInput(canvas, memory, ptr, presenter, { onKey = () => false
   });
   canvas.addEventListener('pointerleave', (e) => { if (free && !locked()) mouse(WM.MOVE, e); });   // at the edge it crossed
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  // The wheel, as WM_MOUSEWHEEL where the mouse is the game's: the game's main window takes a message
+  // for a row of the sidebar (SidebarUp or SidebarDown, 0x7775C0), whatever its delta, so one goes for
+  // each 120 gathered (WHEEL_DELTA: a notch, a line; a trackpad's 100 pixels, as nfsu2-web counts them).
+  let wheelAcc = 0;
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (!theGames()) return;
+    const lines = e.deltaMode === 1 ? e.deltaY : e.deltaMode === 2 ? e.deltaY * 3 : e.deltaY / 100, add = -lines * 120;
+    if (Math.sign(add) !== Math.sign(wheelAcc)) wheelAcc = 0;   // turned the other way: afresh
+    wheelAcc += add;
+    const [w, h] = presenter.size(), p = last ?? [w >> 1, h >> 1];
+    for (; Math.abs(wheelAcc) >= 120; wheelAcc -= Math.sign(wheelAcc) * 120) push(3, Math.sign(wheelAcc) * 120, p[0], p[1]);
+  }, { passive: false });
   window.addEventListener('blur', () => {        // off an edge: the map stops
     const [w, h] = presenter.size();
     if (!last || !w || locked()) return;
@@ -175,7 +192,10 @@ export function startInput(canvas, memory, ptr, presenter, { onKey = () => false
 
   const held = new Set();
   let escDown = false;                           // the page saw Escape go down (the browser kept none of it)
+  const letGo = () => { for (const c of held) push(2, 0, KEYS[c][0], KEYS[c][1]); held.clear(); };
   const key = (down, e) => {
+    if (e.code === 'MetaLeft' || e.code === 'MetaRight' || e.key === 'Meta') { if (down) letGo(); return; }
+    if (e.metaKey && down) return;                 // the browser's shortcut, as it is
     if (e.code === 'Escape') {
       if (down) escDown = true;
       else if (!escDown && performance.now() - lostAt < 1500 && !locked()) {   // the browser's: it let the mouse go
@@ -194,7 +214,7 @@ export function startInput(canvas, memory, ptr, presenter, { onKey = () => false
   const forText = (e) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
   window.addEventListener('keydown', (e) => { if (!forText(e)) key(true, e); });
   window.addEventListener('keyup', (e) => { if (!forText(e)) key(false, e); });
-  window.addEventListener('blur', () => { for (const c of held) push(2, 0, KEYS[c][0], KEYS[c][1]); held.clear(); });
+  window.addEventListener('blur', letGo);
   // last: the last point sent; free: whether the mouse is the game's unkept (tests)
   return { push, last: () => last, free: () => free };
 }

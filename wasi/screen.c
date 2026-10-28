@@ -192,6 +192,7 @@ static void drain_input(void) {
         const int32_t *e = in->ev[tail % RING];
         if (e[0] == 1) hle_input_mouse((uint32_t)e[1], e[2], e[3]);
         else if (e[0] == 2) hle_input_key(e[1] != 0, (uint32_t)e[2], (uint32_t)e[3]);
+        else if (e[0] == 3) hle_input_wheel(e[1], e[2], e[3]);
     }
     __atomic_store_n(&in->tail, tail, __ATOMIC_RELEASE);
 }

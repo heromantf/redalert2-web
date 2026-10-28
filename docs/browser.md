@@ -440,3 +440,28 @@ library's. The offset of the page's start throughout, as Windows'
 FileTimeToLocalFileTime takes the one of now. Checked in Chrome: "[host]
 time zone: UTC+8:00", and a save made at 5:27 AM listed at 10/28/2026 5:27:51
 AM.
+
+**The mouse wheel (2026-10-28).** The game's main window takes
+WM_MOUSEWHEEL (0x7775C0: 522): a row of the sidebar up or down a message
+(its SidebarUp or SidebarDown command, the keyboard's numpad 8 and 2),
+whatever the delta. Neither host sent it. The page now does where the mouse
+is the game's (as its clicks: `web/input.js`): the browser's wheel in
+WHEEL_DELTA units (a line 120, a page three lines, 100 pixels a line, as
+nfsu2-web counts them), one message for each 120 gathered, so a notch is a
+row and a trackpad's slow swipe no flood; `wasi/screen.c` takes it from the
+input ring ({ 3, delta, x, y }) to win32hle's `hle_input_wheel`, which sends
+it to the window with the focus, as Windows; a window that does not take it
+passes it to its parent (DefWindowProc, as Windows'). Checked in Chrome, a
+skirmish: three notches down were three WM_MOUSEWHEEL of -120 to the main
+window's 0x7775C0, three up +120 (a log, taken out after). Its sidebar was
+empty there, and the allied campaign's first mission had no tab of more
+than a page, so the rows moving was not seen.
+
+**Cmd (2026-10-28).**
+- **Cmd** (Meta; the Windows key elsewhere) is the browser's and the
+  system's: a key pressed with it goes to them as it is (Cmd+C copies, Cmd+R
+  reloads), not to the game, and Cmd going down lets go of the keys held:
+  macOS sends no key-up for a key let go while Cmd is down, so a key of a
+  Cmd shortcut stayed down in the game (`web/input.js`, as nfsu2-web does).
+  Before, such a key went to the game and the page cancelled the browser's
+  default for it: Cmd+C copied nothing (why the log could not be copied).

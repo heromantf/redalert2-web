@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>input test: running</title>
+<!--
+  The page's keys and wheel into the game (../input.js), on a ring of its own
+  (no game): a key down and up as they come; Cmd going down lets go of the
+  keys held, and a key with Cmd is not the game's; the window's blur lets go;
+  the wheel in WHEEL_DELTA units, a message for each 120 gathered (a notch, a
+  line; a trackpad's small moves added up), afresh when it turns the other way. node tools/chrome.mjs --page
+  tests/input (the page sets its title to EXIT 0 or EXIT 1).
+-->
+<canvas id="screen" width="640" height="480"></canvas>
+<pre id="out"></pre>
+<script type="module">
+import { startInput } from '../input.js';
+const out = document.getElementById('out');
+let fails = 0;
+const say = (l) => { console.log(`[input] ${l}`); out.textContent += l + '\n'; };
+const check = (ok, what) => { if (!ok) fails++; say(`${ok ? 'ok  ' : 'FAIL'} ${what}`); };
+
+const memory = { buffer: new SharedArrayBuffer(4 * (2 + 256 * 4)) }, ring = new Int32Array(memory.buffer);
+const presenter = { gameAt: () => [100, 50], size: () => [640, 480], scale: () => [1, 1], softCursor() {}, battle: () => false, inPicture: () => true };
+const canvas = document.getElementById('screen');
+startInput(canvas, memory, 0, presenter, {});
+let seen = 0;
+const take = () => {                               // the events since the last take, as the game's pump would
+  const head = Atomics.load(ring, 0), got = [];
+  for (; seen < head; seen++) { const o = 2 + (seen % 256) * 4; got.push([ring[o], ring[o + 1], ring[o + 2], ring[o + 3]]); }
+  Atomics.store(ring, 1, head);
+  return got;
+};
+const key = (type, code, key, meta = false) => window.dispatchEvent(new KeyboardEvent(type, { code, key, metaKey: meta, bubbles: true, cancelable: true }));
+const wheel = (deltaY, deltaMode = 0) => canvas.dispatchEvent(new WheelEvent('wheel', { deltaY, deltaMode, bubbles: true, cancelable: true }));
+const str = (evs) => JSON.stringify(evs);
+
+key('keydown', 'KeyA', 'a'); key('keyup', 'KeyA', 'a');
+check(str(take()) === str([[2, 1, 0x41, 30], [2, 0, 0x41, 30]]), 'A down, A up: both the game\'s');
+
+key('keydown', 'KeyA', 'a'); key('keydown', 'MetaLeft', 'Meta', true);
+check(str(take()) === str([[2, 1, 0x41, 30], [2, 0, 0x41, 30]]), 'A held, Cmd down: A let go, Cmd not the game\'s');
+key('keydown', 'KeyC', 'c', true);
+let evs = take();
+check(evs.length === 0, `Cmd+C: C not the game's (${str(evs)})`);
+key('keyup', 'KeyC', 'c', true); key('keyup', 'MetaLeft', 'Meta', false);
+evs = take();
+check(evs.every((e) => !(e[0] === 2 && e[1] === 1)), `Cmd let go: nothing went down (${str(evs)})`);
+key('keydown', 'KeyB', 'b');
+check(str(take()) === str([[2, 1, 0x42, 48]]), 'B after Cmd: the game\'s again');
+window.dispatchEvent(new Event('blur'));
+check(str(take()) === str([[2, 0, 0x42, 48]]), 'the window\'s blur lets go of B');
+
+for (let i = 0; i < 3; i++) wheel(100);
+check(str(take()) === str([[3, -120, 320, 240], [3, -120, 320, 240], [3, -120, 320, 240]]), 'three notches down (100 px): three of -120, at the cursor (none yet: the middle)');
+for (let i = 0; i < 3; i++) wheel(30);
+check(take().length === 0, 'a trackpad\'s 90 px: none yet');
+wheel(30);
+check(str(take()) === str([[3, -120, 320, 240]]), 'and 30 more: one');
+wheel(-2, 1);
+check(str(take()) === str([[3, 120, 320, 240], [3, 120, 320, 240]]), 'two lines up: two of +120 (what was left of down, 24, gone)');
+say(fails ? `${fails} failed` : 'all passed');
+document.title = `EXIT ${fails ? 1 : 0}`;
+</script>
