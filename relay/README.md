@@ -29,37 +29,40 @@ GOOS=linux GOARCH=amd64 go build -o ../out/relay-linux-amd64 .   # a Linux serve
 queue full, lost by `-test-loss`.
 
 Options: `-addr :8790`, `-tls-cert FILE -tls-key FILE` (wss://: a page served
-over HTTPS may only open wss://), `-origins` (the pages' hosts allowed, `*` by
-default), `-max-clients 128` (pages on the server; 0: no limit) and `-max-lan 0` (pages
-on one LAN: its lobby, where any number of rooms are hosted, 8 players each; 0:
-no limit, the server's bounding it). The game has no limit. What bounds it is this server's bandwidth:
-each page in the lobby broadcasts about 1.3 datagrams a second (~475 bytes) and
-the relay hands each to every page, so N pages take about 0.64 x N^2 KB/s out
-of it (a game in progress sends only to its own players: in a game of 8 with
+over HTTPS may only open wss://; read again on SIGHUP, below), `-origins` (the
+pages' hosts allowed, `*` by default), `-max-clients 128` (pages on the
+server; 0: no limit) and `-max-lan 0` (pages on one LAN: its lobby, where any
+number of rooms are hosted, 8 players each; 0: no limit, the server's bounding
+it). The game has no limit. What bounds it is this server's bandwidth: each
+page in the lobby broadcasts about 1.3 datagrams a second (~475 bytes) and the
+relay hands each to every page, so N pages take about 0.64 x N^2 KB/s out of
+it (a game in progress sends only to its own players: in a game of 8 with
 Protocol Zero, ~330 datagrams a second a page at 45 fps, ~440 at 60, ~45 bytes
-each; 66 with the game's own timing). Measured here, a
-LAN game played meanwhile: 152 pages, 30,700 datagrams a second, 15 MB/s, 0.3
-of a core; 302 pages, 121,000 a second, 58 MB/s (470 Mbit/s), 1.2 cores, and
-the game's pages, 390 lobby datagrams a second each, dropped a few hundred in
-the battle's first minute (the game sent them again: in sync). Set a limit for
+each; 66 with the game's own timing). Measured here, a LAN game played
+meanwhile: 152 pages, 30,700 datagrams a second, 15 MB/s, 0.3 of a core; 302
+pages, 121,000 a second, 58 MB/s (470 Mbit/s), 1.2 cores, and the game's
+pages, 390 lobby datagrams a second each, dropped a few hundred in the
+battle's first minute (the game sent them again: in sync). Set a limit for
 what the server's link carries: 50 pages about 1.6 MB/s, 100 about 6.4 MB/s,
 128 (the default) about 10.5 MB/s (84 Mbit/s).
 
-On a server reachable from the internet: open the TCP port, run it under
-systemd or the like, and give the players `ws://HOST:8790/net` (pages opened
+On a server reachable from the internet: open the TCP port, run it (by hand in
+tmux, or as you like), and give the players `ws://HOST:8790/net` (pages opened
 over http, e.g. on 127.0.0.1) or `wss://HOST:8790/net` with a certificate for
-HOST (pages opened over https). A server near every player keeps the game
-responsive: lockstep play waits for the slowest round trip.
+HOST (pages opened over https; HOST a name or an IP address, the certificate
+for it). A server near every player keeps the game responsive: lockstep play
+waits for the slowest round trip; `-origins game.example.com` keeps it to the
+pages of one site.
 
 ```
-[Unit]
-Description=ra2web relay
-[Service]
-ExecStart=/opt/ra2web/relay -addr :8790 -tls-cert /etc/letsencrypt/live/HOST/fullchain.pem -tls-key /etc/letsencrypt/live/HOST/privkey.pem
-Restart=always
-[Install]
-WantedBy=multi-user.target
+/opt/ra2web/relay -addr :8790 -origins game.example.com -tls-cert /path/fullchain.pem -tls-key /path/privkey.pem
 ```
+
+The certificate is read at the start and again on SIGHUP: the ACME client's
+renewal hook sends it (`pkill -HUP -x relay`), and the relay goes on, its
+pages and their games with it, the next handshakes with the new certificate.
+One that does not load leaves the last in use (the log says so). A restart
+would drop every page.
 
 ## Tests
 
@@ -68,6 +71,10 @@ WantedBy=multi-user.target
   second page of one browser, another build on a LAN in use), a reconnect
   with the token, the counts in `/status`; started with `-test-delay 150ms`,
   `node test.mjs URL 150`: a datagram held that long.
+- `./test-tls.sh` (openssl and Node): a relay on wss:// with a certificate,
+  then another one in the files and SIGHUP: the next handshake has it, a page
+  joined before stays and is answered, and a certificate that does not load
+  leaves the last one in use.
 - For measuring the game over a path like the internet's, not for play:
   `-test-delay 50ms` holds each datagram to a page that long (a round trip
   between two pages is twice it), `-test-jitter 10ms` varies the hold by up

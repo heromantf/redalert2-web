@@ -8,7 +8,7 @@
 // is played through it. The pages decide everything a host's IP stack would
 // (wasi/net.c); this server only hands out addresses and switches datagrams.
 //
-//	go run . [-addr :8790] [-tls-cert FILE -tls-key FILE] [-origins PATTERN,...]
+//	go run . [-addr :8790] [-tls-cert FILE -tls-key FILE (SIGHUP reads them again)] [-origins PATTERN,...]
 //	         [-max-clients N] [-max-lan N] [-test-delay D -test-jitter D -test-loss PCT]
 //
 // Joining: the first message is text, a JSON hello:
@@ -59,6 +59,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -68,10 +69,13 @@ import (
 	"log"
 	mrand "math/rand/v2"
 	"net/http"
+	"os"
+	"os/signal"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -503,6 +507,33 @@ func serveStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"lans": out})
 }
 
+// The certificate and its key, read again on SIGHUP: an ACME client's renewal hook tells the relay
+// so (pkill -HUP -x relay). A certificate is so renewed without a restart,
+// which would drop every page and the games on it; the pages joined stay, and the next handshake
+// has the new one. One that fails to load leaves the last one in use.
+type certFiles struct {
+	cert, key string
+	mu        sync.RWMutex
+	cur       *tls.Certificate
+}
+
+func (c *certFiles) load() error {
+	pair, err := tls.LoadX509KeyPair(c.cert, c.key)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.cur = &pair
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *certFiles) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cur, nil
+}
+
 func main() {
 	flag.Parse()
 	http.HandleFunc("/net", serveNet)
@@ -513,8 +544,24 @@ func main() {
 	}
 	var err error
 	if *tlsCert != "" {
-		log.Printf("[relay] wss://%s/net", *addr)
-		err = srv.ListenAndServeTLS(*tlsCert, *tlsKey)
+		cf := &certFiles{cert: *tlsCert, key: *tlsKey}
+		if err := cf.load(); err != nil {
+			log.Fatalf("[relay] the certificate: %v", err)
+		}
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		go func() {
+			for range hup {
+				if err := cf.load(); err != nil {
+					log.Printf("[relay] SIGHUP: the certificate does not load (%v): the last one kept", err)
+				} else {
+					log.Printf("[relay] SIGHUP: the certificate read again: %s", *tlsCert)
+				}
+			}
+		}()
+		srv.TLSConfig = &tls.Config{GetCertificate: cf.get}
+		log.Printf("[relay] wss://%s/net (SIGHUP reads the certificate again)", *addr)
+		err = srv.ListenAndServeTLS("", "")
 	} else {
 		log.Printf("[relay] ws://%s/net", *addr)
 		err = srv.ListenAndServe()
