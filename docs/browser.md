@@ -221,7 +221,7 @@ its Red Alert 2 sections), what applies here:
   fits, and where not even 1x fits, scaled to fit, as cnc-ddraw's boxing).
 - A menu (Shift+F11, DDrawCompat's `ConfigHotKey` and configuration overlay):
   the filter and its blur or lobes, the locked mouse's sensitivity
-  (DDrawCompat's `MouseSensitivity`, a setting of later DDrawCompat, not the Steam release's 0.5.4), the stats, full screen, a screenshot
+  (DDrawCompat's `MouseSensitivity`, a setting of later DDrawCompat, not the Steam release's 0.5.4), its raw input (below), the stats, full screen, a screenshot
   (`web/settings.js`, kept in localStorage; an older page's sharp, smooth,
   crt and nearest become bilinear 0, 100, 0 and point). Stats in a corner (Shift+F12,
   DDrawCompat's `StatsHotKey`): the page's frame rate, the game's frames a
@@ -277,6 +277,30 @@ menu, its blur or lobes shown for the filters that have one, Shift+F12's
 stats, a screenshot of 800x600 as a PNG, Ctrl+Tab letting the (simulated)
 locked mouse go, a sensitivity of 200% moving it twice as far (100 CSS px:
 125 game pixels at 0.625).
+
+**The locked mouse's raw input (2026-10-28).** A choice of the menu's, off
+by default (原始鼠标输入, `rawMouse`): the lock asked with
+`unadjustedMovement`, the mouse's own counts with no acceleration of the
+system's (`web/pointer-lock.js`, which every request for the lock goes
+through: `fullscreen.js`, `input.js`, the menu's closing). Chrome has it on
+Windows, macOS (10.15.1 and later) and ChromeOS; on Linux the reports
+differ. Where the browser refuses it as unsupported (`NotSupportedError`) the
+lock is asked again without it, not with it again that session, and the menu
+says so; a `pointerlockerror` while that is unsettled is not taken for the
+lock's refusal (`input.js`: the click that asked would go to the game). It
+counts from the next lock: the menu lets the mouse go and keeps it again as it
+closes. Asked for after a report from Chrome full screen on Windows: the cursor
+now and then jumping to the top left or bottom right corner as the mouse is
+shaken (a move of hundreds of pixels at once, held at the picture's edge;
+developers saw such moves from Chrome's Pointer Lock on Windows 10). Whether
+the raw input avoids them is not known: no Windows here. Checked
+(`web/tests/pointer-lock.html`, on stand-ins for the canvas): off, the lock as
+before; on, asked with it; refused as unsupported, asked again without it and
+not with it the next time; refused otherwise, the caller's refusal; no promise
+(an older browser). A real lock could not be had here (headless Chrome has
+none, and the headed window Playwright opens gets `WrongDocumentError` for the
+plain lock too). The play page: the menu's row, its choice kept, the main menu
+reached, full screen entered.
 
 **The game as shipped, on the page (2026-10-26).** The web has a host of its
 own, `wasi/main.c`, in place of the native one (`src/linux/main.c`), and none

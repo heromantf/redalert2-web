@@ -67,6 +67,7 @@ node tools/chrome.mjs --page tests/cache       # the game data's OPFS cache
 node tools/chrome.mjs --page tests/store       # the saves' OPFS store
 node tools/chrome.mjs --page tests/saves       # the saves out to a zip and back
 node tools/chrome.mjs --page tests/input       # the keys (Cmd too) and the wheel into the game
+node tools/chrome.mjs --page tests/pointer-lock --mark ready --tap canvas@0.5   # the mouse's lock, raw input or not
 node tools/chrome.mjs --page tests/predownload --query lossy \
   --server --throttle --server 3000,40 --server --drop --server 9   # the download ahead over a slow, lossy link
 tools/lan/pair.sh 300 chrome                   # two players through a relay, one in Chrome, in sync

@@ -9,17 +9,19 @@
 //                  downloaded (cnc-ddraw's keyscreenshot)
 // The settings (localStorage "ra2web.settings"): scale (presenter.js's
 // SCALES' id), params (each filter's blur or lobes), sensitivity (the locked
-// mouse's speed, in percent: later DDrawCompat's MouseSensitivity, not in the Steam release's 0.5.4), stats.
+// mouse's speed, in percent: later DDrawCompat's MouseSensitivity, not in the Steam release's 0.5.4), stats,
+// rawMouse (the locked mouse's raw input, no acceleration of the system's: pointer-lock.js).
 // The menu also has the page's log, downloaded or copied (logs: page-log.js), and the stats
 // a line for online play (latency: online.js latencyText).
 // startMenu({ settings, presenter, screen, audio, memory, ctl, latency, logs, log })
 //   presenter, audio, memory, ctl, latency: getters (they come as the game starts)
 //   -> { toggle(), close(), isOpen(), toggleStats(), screenshot() }
 import { CTL_TIMER_LATE } from '../host/proto.mjs';
+import { lockPointer, rawMouse, setRawMouse } from './pointer-lock.js';
 import { SCALES } from './presenter.js';
 
 const KEY = 'ra2web.settings';
-const DEFAULTS = { scale: 'bilinear', params: {}, sensitivity: 100, stats: false };
+const DEFAULTS = { scale: 'bilinear', params: {}, sensitivity: 100, stats: false, rawMouse: false };
 const SCALE_NAMES = {
   bilinear: '双线性（默认）', point: '最近邻（Steam 版的设置）', integer: '整数倍', bicubic: '双三次', lanczos: 'Lanczos', spline: 'Spline',
   'cnc-bilinear': '双线性', catmull: 'Catmull-Rom（cnc-ddraw 默认）', lanczos2: 'Lanczos2-sharp', xbr: 'xBR-lv2',
@@ -66,11 +68,13 @@ export function startMenu({ settings, presenter, screen, audio = () => null, mem
       `<optgroup label="${from}">${SCALES.filter((m) => m.from === from).map((m) => `<option value="${m.id}">${SCALE_NAMES[m.id]}</option>`).join('')}</optgroup>`).join('')}</select></div>
     <div class="row" data-r="param"><span data-v="param-name"></span><span><input type="range" data-k="param"> <b data-v="param"></b></span></div>
     <div class="row"><span>鼠标灵敏度（全屏锁定时）</span><span><input type="range" min="50" max="200" step="10" data-k="sensitivity"> <b data-v="sensitivity"></b></span></div>
+    <div class="row"><span>原始鼠标输入（全屏锁定时，不经系统加速）</span><span><b data-v="rawMouse"></b> <input type="checkbox" data-k="rawMouse"></span></div>
     <div class="row"><span>显示统计</span><input type="checkbox" data-k="stats"></div>
     <div class="row"><button data-a="full">全屏 / 退出全屏</button><button data-a="shot">截图</button><button data-a="close">关闭</button></div>
     <div class="row"><span>日志</span><span><button data-a="logsave">下载</button><button data-a="logcopy">复制</button> <b data-v="log"></b></span></div>
     <div class="keys">Shift+F11 设置 · Alt+Enter 全屏 · Ctrl+Tab 解锁鼠标（不退出全屏）· Shift+F12 统计 · PrintScreen 截图 · 长按 Esc 退出全屏</div>
   </div>`;
+  setRawMouse(settings.rawMouse);
   const stats = document.createElement('div'); stats.className = 'ra2-stats'; stats.hidden = !settings.stats;
   document.body.append(menu, stats);
   const $ = (sel) => menu.querySelector(sel);
@@ -97,11 +101,14 @@ export function startMenu({ settings, presenter, screen, audio = () => null, mem
     $('[data-k=sensitivity]').value = settings.sensitivity;
     $('[data-v=sensitivity]').textContent = `${settings.sensitivity}%`;
     $('[data-k=stats]').checked = settings.stats;
+    $('[data-k=rawMouse]').checked = settings.rawMouse;
+    $('[data-v=rawMouse]').textContent = rawMouse() === 'no' ? '这个浏览器不支持，用的是普通方式' : '';
   };
   $('[data-k=scale]').onchange = (e) => { settings.scale = e.target.value; showParam(); apply(); };
   $('[data-k=param]').oninput = (e) => { settings.params[settings.scale] = +e.target.value; showParam(); apply(); };
   $('[data-k=sensitivity]').oninput = (e) => { settings.sensitivity = +e.target.value; $('[data-v=sensitivity]').textContent = `${settings.sensitivity}%`; apply(); };
   $('[data-k=stats]').onchange = (e) => { settings.stats = e.target.checked; apply(); };
+  $('[data-k=rawMouse]').onchange = (e) => { settings.rawMouse = e.target.checked; setRawMouse(settings.rawMouse); apply(); };   // from the next lock: the menu's closing
   $('[data-a=full]').onclick = () => screen.toggle();
   $('[data-a=shot]').onclick = () => screenshot();
   $('[data-a=close]').onclick = () => close();
@@ -118,7 +125,7 @@ export function startMenu({ settings, presenter, screen, audio = () => null, mem
   }
   function close() {
     menu.hidden = true;
-    if (wasLocked) document.querySelector('canvas')?.requestPointerLock?.()?.catch?.(() => {});   // as it was, in a window too
+    if (wasLocked) lockPointer(document.querySelector('canvas'))?.catch?.(() => {});   // as it was, in a window too
     log('[menu] closed');
   }
   async function screenshot() {

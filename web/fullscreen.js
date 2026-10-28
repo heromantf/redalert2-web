@@ -7,10 +7,12 @@
 // mouse (input.js), the keys not locked. Where the browser has no Keyboard Lock (Safari,
 // Firefox) the page is full screen all the same and Escape leaves it.
 //   gameScreen({ root, canvas, log }) -> { enter(), exit(), toggle(), on() }   (enter, toggle: within a click or a key)
+import { lockPointer } from './pointer-lock.js';
+
 export function gameScreen({ root = document.documentElement, canvas, log = () => {} }) {
   const lockMouse = () => {
     if (document.pointerLockElement === canvas) return;
-    try { const p = canvas.requestPointerLock?.(); p?.catch?.((x) => log(`[screen] the mouse not locked: ${x?.message ?? x}`)); }
+    try { const p = lockPointer(canvas); p?.catch?.((x) => log(`[screen] the mouse not locked: ${x?.message ?? x}`)); }
     catch (x) { log(`[screen] the mouse not locked: ${x?.message ?? x}`); }
   };
   async function enter() {

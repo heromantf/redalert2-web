@@ -43,6 +43,8 @@
 //   the game's cursor at the edge it crossed, so the map goes on scrolling.
 // The window losing the focus moves the game's cursor off an edge, and the
 // map stops.
+import { lockPointer, rawTrying } from './pointer-lock.js';
+
 const WM = { MOVE: 0x200, LDOWN: 0x201, LUP: 0x202, RDOWN: 0x204, RUP: 0x205, MDOWN: 0x207, MUP: 0x208 };
 
 const KEYS = (() => {
@@ -68,6 +70,7 @@ const KEYS = (() => {
   });
   return t;
 })();
+
 
 export function startInput(canvas, memory, ptr, presenter, { onKey = () => false, sensitivity = () => 1 } = {}) {
   let ring = null;
@@ -117,7 +120,7 @@ export function startInput(canvas, memory, ptr, presenter, { onKey = () => false
       if (tries > 1 && !locked() && !menus() && navigator.userActivation?.isActive !== false) setTimeout(() => ask(tries - 1), 400);
     };
     if (!canvas.requestPointerLock || locked()) return;
-    try { const q = canvas.requestPointerLock(); q?.catch?.(again); } catch { again(); }
+    try { const q = lockPointer(canvas); q?.catch?.(again); } catch { again(); }
   }
   let wasBattle = false, wasFull = false;
   (function watch() {                            // a window: the lock follows the battle
@@ -132,10 +135,10 @@ export function startInput(canvas, memory, ptr, presenter, { onKey = () => false
     const p = presenter.inPicture(cx, cy) ? presenter.gameAt(cx, cy) : (w ? [w >> 1, h >> 1] : null);
     if (!free) pending = { button: e.button, p, up: false };
     if (!canvas.requestPointerLock) return refused();
-    try { const q = canvas.requestPointerLock(); q?.catch?.(() => { if (pending && !locked()) refused(); }); }
+    try { const q = lockPointer(canvas); q?.catch?.(() => { if (pending && !locked()) refused(); }); }
     catch { if (pending) refused(); }
   }
-  document.addEventListener('pointerlockerror', () => { if (pending && !locked()) refused(); });
+  document.addEventListener('pointerlockerror', () => { if (pending && !locked() && !rawTrying()) refused(); });   // raw input refused: asked again (pointer-lock.js)
   document.addEventListener('pointerlockchange', () => {
     if (locked()) {                              // from the click that asked, else where the game's cursor was
       free = false;

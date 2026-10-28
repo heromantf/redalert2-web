@@ -1,0 +1,100 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pointer-lock test: running</title>
+<!--
+  The mouse's lock as the page asks for it (../pointer-lock.js), on stand-ins
+  for the canvas: the raw input off, the lock as before; on, the lock with
+  unadjustedMovement, and where that is refused as unsupported the lock again
+  without it, and never with it again; refused for another reason (no click
+  to ask on), the refusal the caller's; a browser whose request gives no
+  promise; while it is unsettled rawTrying() says so. Each case on a module of
+  its own (its state). Then the real thing, for the record: a click on the
+  canvas asks with the raw input on (&plain: off, to compare), and the page
+  prints what came of it (headless Chrome keeps no mouse). node tools/chrome.mjs --page
+  tests/pointer-lock --mark ready --tap canvas@0.5 (the page sets its title to
+  EXIT 0 or EXIT 1).
+-->
+<canvas id="screen" width="320" height="200" style="background:#123"></canvas>
+<pre id="out"></pre>
+<script type="module">
+const out = document.getElementById('out');
+let fails = 0;
+const say = (l) => { console.log(`[pointer-lock] ${l}`); out.textContent += l + '\n'; };
+const check = (ok, what) => { if (!ok) fails++; say(`${ok ? 'ok  ' : 'FAIL'} ${what}`); };
+let n = 0;
+const fresh = () => import(`../pointer-lock.js?case=${++n}`);   // a module of its own: its state from the start
+const err = (name) => Object.assign(new Error(name), { name });
+// a stand-in: each request noted (its options), answered by the next of `answers`
+// ('ok', an error's name, or 'none': no promise)
+function standIn(...answers) {
+  const calls = [];
+  return { calls, requestPointerLock(opts) {
+    calls.push(opts === undefined ? 'plain' : JSON.stringify(opts));
+    const a = answers.shift() ?? 'ok';
+    if (a === 'none') return undefined;
+    return a === 'ok' ? Promise.resolve() : Promise.reject(err(a));
+  } };
+}
+const outcome = (p) => p.then(() => 'ok', (x) => x.name);
+
+{
+  const m = await fresh(), el = standIn();
+  m.setRawMouse(false);
+  const r = await outcome(m.lockPointer(el));
+  check(r === 'ok' && el.calls.join() === 'plain' && m.rawMouse() === 'off', `off: the lock as before (${el.calls.join()}, ${m.rawMouse()})`);
+}
+{
+  const m = await fresh(), el = standIn('ok');
+  m.setRawMouse(true);
+  const p = m.lockPointer(el), during = m.rawTrying();
+  const r = await outcome(p);
+  check(r === 'ok' && el.calls.join() === '{"unadjustedMovement":true}' && m.rawMouse() === 'on' && during && !m.rawTrying(),
+        `on: asked with unadjustedMovement (${el.calls.join()}, ${m.rawMouse()}, trying ${during} then ${m.rawTrying()})`);
+}
+{
+  const m = await fresh(), el = standIn('NotSupportedError', 'ok', 'ok');
+  m.setRawMouse(true);
+  const p = m.lockPointer(el), during = m.rawTrying();
+  const r = await outcome(p);
+  check(r === 'ok' && el.calls.join(' ') === '{"unadjustedMovement":true} plain' && m.rawMouse() === 'no' && during && !m.rawTrying(),
+        `unsupported: asked again without it, the lock kept (${el.calls.join(' ')}, ${m.rawMouse()}, trying ${during} then ${m.rawTrying()})`);
+  await outcome(m.lockPointer(el));
+  check(el.calls.slice(2).join() === 'plain', `and the next time without it at once (${el.calls.slice(2).join()})`);
+}
+{
+  const m = await fresh(), el = standIn('NotSupportedError', 'NotAllowedError');
+  m.setRawMouse(true);
+  const r = await outcome(m.lockPointer(el));
+  check(r === 'NotAllowedError' && el.calls.length === 2 && !m.rawTrying(), `unsupported, then the lock refused: the caller's refusal (${r}, ${el.calls.length} asks)`);
+}
+{
+  const m = await fresh(), el = standIn('NotAllowedError');
+  m.setRawMouse(true);
+  const r = await outcome(m.lockPointer(el));
+  check(r === 'NotAllowedError' && el.calls.length === 1 && m.rawMouse() === 'on' && !m.rawTrying(),
+        `refused for another reason: not asked again, the raw input still wanted (${r}, ${el.calls.length} ask, ${m.rawMouse()})`);
+}
+{
+  const m = await fresh(), el = standIn('none');
+  m.setRawMouse(true);
+  const p = m.lockPointer(el);
+  check(p === undefined && !m.rawTrying() && el.calls.length === 1, `no promise (an older browser): asked once, nothing to wait for`);
+  check(m.lockPointer({}) === undefined && m.lockPointer(null) === undefined, 'no lock at all: nothing asked');
+}
+say(fails ? `${fails} failed` : 'all passed');
+
+// the real thing, for the record (not a check): a click on the canvas asks with the raw input on
+const real = await fresh();
+const rawOn = !new URLSearchParams(location.search).has('plain');   // &plain: the lock as before, to compare
+real.setRawMouse(rawOn);
+const canvas = document.getElementById('screen');
+canvas.addEventListener('click', async () => {
+  const p = real.lockPointer(canvas);
+  const r = p ? await outcome(p) : 'no promise';
+  say(`real: asked with the raw input ${rawOn ? 'on' : 'off'} (${navigator.userAgent.match(/\(([^)]*)\)/)?.[1]}): ${r}; rawMouse ${real.rawMouse()}; locked ${document.pointerLockElement === canvas}`);
+  document.exitPointerLock?.();
+  document.title = `EXIT ${fails ? 1 : 0}`;
+});
+say('ready: click the canvas');
+setTimeout(() => { if (!document.title.startsWith('EXIT')) { say('real: no click came'); document.title = `EXIT ${fails ? 1 : 0}`; } }, 8000);
+</script>
