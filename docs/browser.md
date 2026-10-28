@@ -457,7 +457,7 @@ window's 0x7775C0, three up +120 (a log, taken out after). Its sidebar was
 empty there, and the allied campaign's first mission had no tab of more
 than a page, so the rows moving was not seen.
 
-**Cmd (2026-10-28).**
+**Cmd and the page's log (2026-10-28).**
 - **Cmd** (Meta; the Windows key elsewhere) is the browser's and the
   system's: a key pressed with it goes to them as it is (Cmd+C copies, Cmd+R
   reloads), not to the game, and Cmd going down lets go of the keys held:
@@ -465,3 +465,10 @@ than a page, so the rows moving was not seen.
   Cmd shortcut stayed down in the game (`web/input.js`, as nfsu2-web does).
   Before, such a key went to the game and the page cancelled the browser's
   default for it: Cmd+C copied nothing (why the log could not be copied).
+- **The log** (`web/page-log.js`): all of a session's lines (the last
+  20,000), downloaded as a text file or copied whole, from the start panel
+  ("日志") or Shift+F11, a header of the page and the browser first; the
+  page's own thread keeps it, so a game that hangs (it runs in workers)
+  leaves it to be had. The log over the picture (a click on the bar) is added
+  to a line at a time, the last 500, so a selection in it stays to be copied:
+  it was all written again twice a second, and Cmd+C was the page's.

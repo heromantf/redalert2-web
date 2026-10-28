@@ -10,8 +10,10 @@
 // The settings (localStorage "ra2web.settings"): scale (presenter.js's
 // SCALES' id), params (each filter's blur or lobes), sensitivity (the locked
 // mouse's speed, in percent: later DDrawCompat's MouseSensitivity, not in the Steam release's 0.5.4), stats.
-// startMenu({ settings, presenter, screen, audio, memory, ctl, log })
-//   presenter, audio, memory, ctl: getters (they come as the game starts)
+// The menu also has the page's log, downloaded or copied (logs: page-log.js), and the stats
+// a line for online play (latency: online.js latencyText).
+// startMenu({ settings, presenter, screen, audio, memory, ctl, latency, logs, log })
+//   presenter, audio, memory, ctl, latency: getters (they come as the game starts)
 //   -> { toggle(), close(), isOpen(), toggleStats(), screenshot() }
 import { CTL_TIMER_LATE } from '../host/proto.mjs';
 import { SCALES } from './presenter.js';
@@ -55,7 +57,7 @@ const CSS = `
   .ra2-stats[hidden] { display: none; }`;
 
 export function startMenu({ settings, presenter, screen, audio = () => null, memory = () => null, ctl = () => null, latency = () => '',
-                           log = () => {} }) {
+                           logs = null, log = () => {} }) {
   const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
   const menu = document.createElement('div'); menu.className = 'ra2-menu'; menu.hidden = true;
   menu.innerHTML = `<div class="box">
@@ -66,6 +68,7 @@ export function startMenu({ settings, presenter, screen, audio = () => null, mem
     <div class="row"><span>鼠标灵敏度（全屏锁定时）</span><span><input type="range" min="50" max="200" step="10" data-k="sensitivity"> <b data-v="sensitivity"></b></span></div>
     <div class="row"><span>显示统计</span><input type="checkbox" data-k="stats"></div>
     <div class="row"><button data-a="full">全屏 / 退出全屏</button><button data-a="shot">截图</button><button data-a="close">关闭</button></div>
+    <div class="row"><span>日志</span><span><button data-a="logsave">下载</button><button data-a="logcopy">复制</button> <b data-v="log"></b></span></div>
     <div class="keys">Shift+F11 设置 · Alt+Enter 全屏 · Ctrl+Tab 解锁鼠标（不退出全屏）· Shift+F12 统计 · PrintScreen 截图 · 长按 Esc 退出全屏</div>
   </div>`;
   const stats = document.createElement('div'); stats.className = 'ra2-stats'; stats.hidden = !settings.stats;
@@ -102,6 +105,8 @@ export function startMenu({ settings, presenter, screen, audio = () => null, mem
   $('[data-a=full]').onclick = () => screen.toggle();
   $('[data-a=shot]').onclick = () => screenshot();
   $('[data-a=close]').onclick = () => close();
+  $('[data-a=logsave]').onclick = () => logs?.download();                // page-log.js: the whole of the session's
+  $('[data-a=logcopy]').onclick = async () => { $('[data-v=log]').textContent = (await logs?.copy()) ? '已复制' : '复制不了，用下载'; };
 
   let wasLocked = false;
   function open() {

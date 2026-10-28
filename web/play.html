@@ -103,6 +103,11 @@
       <div class="hint">存档存在这个浏览器里，每个网址各自一份：换网址、换浏览器或换电脑前，先在这里导出成一个 zip，再到那边导入。只有存档，不含设置。</div>
     </section>
     <section>
+      <div class="head"><b>日志</b></div>
+      <div class="row"><button id="lognow">下载日志</button><button id="logcopy">复制日志</button><span class="hint" id="loghint"></span></div>
+      <div class="hint">出了问题就用它：从这个页面打开算起的全部日志。游戏里 Shift+F11 也能下载和复制。</div>
+    </section>
+    <section>
       <div class="head"><b>联机</b></div>
       <div class="row"><label for="relay">服务器</label><input id="relay" class="text" placeholder="wss://服务器地址:端口/net（空着就不联机）" spellcheck="false"></div>
       <div class="row"><label for="pname">玩家名</label><input id="pname" class="text short" maxlength="16" spellcheck="false"><span class="hint" id="namehint"></span></div>
@@ -121,6 +126,7 @@ import { startInput } from './input.js';
 import { startAudio } from './audio.js';
 import { predownload } from './predownload.js';
 import { exportSaves, listSaves, readSaves, writeSaves } from './saves.js';
+import { pageLog } from './page-log.js';
 import { cacheBusy, deleteCache } from './data-cache.js';
 import { manifestFiles, movieFiles } from './game-files.js';
 import { gameScreen } from './fullscreen.js';
@@ -133,16 +139,29 @@ const args = extra.length ? extra : ['--run', '--debuglog', '--exe', '/game/game
 const env = Object.fromEntries(q.getAll('env').map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)]));
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen'), bar = $('bar'), logEl = $('log');
-const lines = [];
+// The log: the whole of it kept (page-log.js: to download or copy), the last 500 lines on the bar's
+// click, a line added at a time so that a selection in it stays to be copied
+const lines = [], SHOWN = 500;
 let last = 'starting';
-bar.onclick = () => { logEl.style.display = logEl.style.display === 'block' ? 'none' : 'block'; logEl.scrollTop = logEl.scrollHeight; };
+const plog = pageLog();
+bar.onclick = () => {
+  const show = logEl.style.display !== 'block';
+  logEl.style.display = show ? 'block' : 'none';
+  if (show) { logEl.replaceChildren(...lines.map((l) => document.createTextNode(l + '\n'))); logEl.scrollTop = logEl.scrollHeight; }
+};
 function log(s) {
   console.log(s);
-  lines.push(s); if (lines.length > 500) lines.shift();
+  plog.add(s);
+  lines.push(s); if (lines.length > SHOWN) lines.shift();
   last = s;
-  if (logEl.style.display === 'block') { logEl.textContent = lines.join('\n'); logEl.scrollTop = logEl.scrollHeight; }
+  if (logEl.style.display === 'block') {
+    const atEnd = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 4;
+    logEl.append(document.createTextNode(s + '\n'));
+    while (logEl.childNodes.length > SHOWN) logEl.firstChild.remove();
+    if (atEnd) logEl.scrollTop = logEl.scrollHeight;
+  }
 }
-const ra2web = (window.ra2web = { log: lines });
+const ra2web = (window.ra2web = { log: lines, pageLog: plog });   // the tests: the last lines, the whole log
 const screen = (ra2web.screen = gameScreen({ canvas, log }));
 $('fs').onclick = () => { screen.toggle(); canvas.focus(); };
 document.addEventListener('fullscreenchange', () => { $('fs').textContent = screen.on() ? '退出全屏' : '全屏'; });
@@ -164,7 +183,7 @@ async function goOnline() {
 }
 const settings = (ra2web.settings = loadSettings());
 const menu = (ra2web.menu = startMenu({ settings, screen, log, presenter: () => ra2web.presenter, audio: () => ra2web.audio,
-  memory: () => ra2web.memory, ctl: () => proc?.ctl, latency: () => latencyText(netStatus) }));
+  memory: () => ra2web.memory, ctl: () => proc?.ctl, latency: () => latencyText(netStatus), logs: plog }));
 // the page's own keys, before the game's (input.js): true, and the game never sees it
 let rightAlt = false;
 function onKey(e, down) {
@@ -198,7 +217,6 @@ setInterval(() => {
   const p = ra2web.presenter, [w, h] = p ? p.size() : [0, 0];
   const sound = ra2web.audio && ra2web.audio.state() !== 'running' ? ' | click for sound' : '';
   bar.textContent = `${netStatus ? `${netText(netStatus)} | ` : ''}${p ? `${w}x${h}` : 'no picture yet'}${sound} | ${last}`;   // the frame rate: the stats (Shift+F12)
-  if (logEl.style.display === 'block') logEl.textContent = lines.join('\n');
 }, 500);
 
 // ---- the game ----
@@ -288,6 +306,9 @@ $('del').onclick = async () => {
   storeLine();
 };
 $('full').onchange = () => localStorage.setItem('ra2web.full', $('full').checked ? '1' : '0');
+// the log, to keep or hand on (page-log.js)
+$('lognow').onclick = () => plog.download();
+$('logcopy').onclick = async () => { $('loghint').textContent = (await plog.copy()) ? '已复制到剪贴板' : '浏览器不让复制，用下载吧'; };
 // the saves, out of this browser and back (saves.js), while the game is not running (the panel is up)
 const saveSet = q.get('save') ?? 'ra2yr';
 async function savesLine() {
