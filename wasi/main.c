@@ -217,12 +217,14 @@ static uint32_t checksum(const uint8_t *px, int w, int h, int pitch, int bpp) {
 }
 static void frame_pump(void) {
     static uint32_t next;
+    static int started;   /* the first frame at once: the tick count is the epoch's ms, its top bit set half the time */
     const uint8_t *px;
     const uint32_t *pal;
     int w, h, pitch, bpp;
     hle_screen_pump();
     uint32_t now = hle_ticks_ms();
-    if ((int32_t)(now - next) < 0 || !hle_dd_frame(&px, &w, &h, &pitch, &bpp, &pal, NULL)) return;
+    if ((started && (int32_t)(now - next) < 0) || !hle_dd_frame(&px, &w, &h, &pitch, &bpp, &pal, NULL)) return;
+    started = 1;
     next = now + 3333;
     fprintf(stderr, "[record] frame %ld checksum %08X game frame %u\n", g_shown * 100, checksum(px, w, h, pitch, bpp),
             MEM32(RA2_GAME_FRAME_VA));

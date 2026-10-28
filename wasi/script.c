@@ -7,6 +7,9 @@
  *   --select DLG:CTRL=N@s  pick item N of a list or combo box (a slider's position)
  *   --waitlog TEXT@s     hold until the game's debug log prints a line with TEXT
  *   --move x,y@s  --click [c][s][a]+x,y@s  --key [c][s][a]+vk@s  --wait VA@s
+ *   --urclick x,y@s  a right click as the mouse gives it (as --uclick)
+ *   --keydown vk@s  --keyup vk@s   a key held down from one to the other (the
+ *                   waypoint mode is the time its key is held)
  *   --uclick x,y@s  a click as the mouse gives it: to the window under the
  *                   point (user32's hit test and capture), as screen.c does
  *   --drag x1,y1,x2,y2@s   --rdrag x1,y1,x2,y2@s (right button, held 1 s at the end)
@@ -86,6 +89,12 @@ int script_arg(int argc, char **argv, int i) {
     } else if (!strcmp(argv[i], "--wait")) {
         if (sscanf(a, "%i@%lf", &e.x, &e.t) != 2) return 0;
         e.kind = 'w';
+    } else if (!strcmp(argv[i], "--urclick")) {
+        if (sscanf(a, "%d,%d@%lf", &e.x, &e.y, &e.t) != 3) return 0;
+        e.kind = 'R';
+    } else if (!strcmp(argv[i], "--keydown") || !strcmp(argv[i], "--keyup")) {
+        if (sscanf(a, "%i@%lf", &e.x, &e.t) != 2) return 0;
+        e.kind = argv[i][5] == 'd' ? 'D' : 'K';
     } else if (!strcmp(argv[i], "--key")) {
         const char *plus = strchr(a, '+');
         if (plus) {
@@ -333,6 +342,13 @@ static void *script(void *unused) {
             fprintf(stderr, "[input] %.1fs waited %.1fs for [0x%X] = %u\n", e->t, (now_ms() - w0) / 1000.0, e->x, MEM32((uint32_t)e->x));
             continue;
         }
+        if (e->kind == 'D' || e->kind == 'K') {
+            int down = e->kind == 'D';
+            fprintf(stderr, "[input] %.1fs key 0x%X %s\n", e->t, e->x, down ? "down" : "up");
+            key_state((uint32_t)e->x, down);
+            post(h, down ? WM_KEYDOWN : WM_KEYUP, (uint32_t)e->x, down ? 1u : 0xC0000001u);
+            continue;
+        }
         if (e->kind == 'k') {
             fprintf(stderr, "[input] %.1fs key %s%s%s0x%X\n", e->t, e->y & 1 ? "Ctrl-" : "", e->y & 2 ? "Shift-" : "",
                     e->y & 4 ? "Alt-" : "", e->x);
@@ -346,6 +362,15 @@ static void *script(void *unused) {
             sleep_ms(500);
             for (int m = 0; m < 3; m++)
                 if (e->y & 1 << m) { key_state(mvk[m], 0); post(h, WM_KEYUP, mvk[m], 0xC0000001u); }
+            continue;
+        }
+        if (e->kind == 'R') {
+            fprintf(stderr, "[input] %.1fs urclick %d,%d\n", e->t, e->x, e->y);
+            mach_enter(); hle_input_mouse(0x0200u /* WM_MOUSEMOVE */, e->x, e->y); mach_leave();
+            sleep_ms(100);
+            mach_enter(); hle_input_mouse(WM_RBUTTONDOWN, e->x, e->y); mach_leave();
+            sleep_ms(150);
+            mach_enter(); hle_input_mouse(WM_RBUTTONUP, e->x, e->y); mach_leave();
             continue;
         }
         if (e->kind == 'u') {
