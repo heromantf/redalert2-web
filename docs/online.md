@@ -61,9 +61,12 @@ Nothing of the game changes for it but its sockets and the fixes below.
   ring's bell, reconnects with the relay's token (the same address back).
   A worker, not the page: a background tab's page is throttled, and lockstep
   play waits for the slowest player.
-- **The page** (`web/online.js`, `play.html`'s start panel, "联机"): the
-  relay's address and the player's name (localStorage; `&relay=&name=` for
-  tests); the name goes into the game's `[MultiPlayer] Handle`
+- **The page** (`web/online.js`, `play.html`'s start panel, "联机"): a
+  switch, "开启联机" (off unless turned on: localStorage, `&online`), the
+  relay's address and the player's name (localStorage; `&relay=&name=`, a
+  site's own address from `web/server.mjs --relay`); the switch off, the game
+  plays alone whatever the address; at once (`&go`, the tests: no panel) the
+  address alone is online. The name goes into the game's `[MultiPlayer] Handle`
   (`wasi/main.c`, RA2WEB_NAME; letters, digits, space, `_`, `-`, 16 at most);
   one page of a browser online (a Web Lock, and the relay refuses a second
   page of one browser id); the module's id (its SHA-256's first 8 bytes)
@@ -71,7 +74,8 @@ Nothing of the game changes for it but its sockets and the fixes below.
 - **The game data here first** (`web/online.js` `onlineData`): a page plays
   online only with all the game data but the movies (game-files.js
   `aheadFiles`, 814 MB) in this browser; the panel says what is missing and
-  holds "开始游戏" until it is there or the relay's address is cleared; at once
+  holds "开始游戏" until it is there (with an address and a name) or the switch
+  is off; at once
   (the tests) the page plays alone, saying why (`&download` downloads first).
   A player reading as he plays holds the others up (lockstep): with
   `web/server.mjs --log-data`, a fresh page fetched `ra2.mix`/`ra2md.mix` as

@@ -28,7 +28,8 @@ node /srv/ra2web/web/server.mjs --public --host 127.0.0.1 --port 8780 --data /sr
 `https://game.example.com/` takes a player to the game's page
 (`/web/play.html`), `--relay`'s address filled in for its relay (where the link
 gives none of its own), the link's other parameters kept: the address to give
-your friends is the site's, nothing more.
+your friends is the site's, nothing more. Online or not is still the player's:
+the start panel's "开启联机", off until turned on (off, the game plays alone).
 
 `--public` serves what a player's page needs and nothing else of the
 checkout (`web/` but its tests, `host/`, `out/ra2.wasm`; not the lift, the
@@ -116,10 +117,12 @@ asks of the link.
 
 ## The players
 
-Chrome on a computer; each a name of their own (letters, digits, space, `_`,
-`-`); the first visit downloads ~814 MB of game data (without the movies) into
-the browser, the start panel says how far. The link is the site's,
-`https://game.example.com/`: the relay is filled in (`--relay`).
+Chrome on a computer. The link is the site's, `https://game.example.com/`.
+Alone, the game reads the data as it goes. Online: the start panel's
+"开启联机" on, each a name of their own (letters, digits, space, `_`, `-`),
+and first all the game data but the movies (~814 MB) downloaded into the
+browser (the panel's download, it says how far); the relay is filled in
+(`--relay`).
 
 ## Checked here
 

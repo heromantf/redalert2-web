@@ -14,10 +14,12 @@
   settings.js), Shift+F12 the stats (DDrawCompat's), PrintScreen a screenshot,
   Ctrl+Tab (or right Alt + right Ctrl) lets the mouse go (cnc-ddraw's). The host is the web's own (wasi/main.c:
   the game as shipped, none of the remaster's features).
-  Online play (online.js): a relay's address and the player's name, on the panel (or &relay=URL&name=NAME):
-  the game then joins the relay's virtual LAN (wasi/net.c, ../host/core/net.mjs, relay/main.go), and its own
-  Network lobby is that LAN's. One page of a browser online at a time (a Web Lock), and only with all the game
-  data but the movies in this browser (online.js onlineData; the panel says what is missing).
+  Online play (online.js): the panel's switch, "开启联机" (remembered; &online turns it on), a relay's address and
+  the player's name (or &relay=URL&name=NAME; at once, &go, the address alone is online): the game then joins
+  the relay's virtual LAN (wasi/net.c, ../host/core/net.mjs, relay/main.go), and its own Network lobby is that
+  LAN's. The switch off, the game plays alone, an address (the site's own, &relay) kept for when it is on. One
+  page of a browser online at a time (a Web Lock), and only with all the game data but the movies in this
+  browser (online.js onlineData; the panel says what is missing).
   /web/play.html?arg=...&arg=...   other host arguments, in order (as natively); with them, or with
                 &go                the game at once, no panel (the tests); &panel: the panel all the same
                 &download          the download ahead started at once (&movies: with them); with the game at
@@ -108,11 +110,14 @@
       <div class="hint">出了问题就用它：从这个页面打开算起的全部日志。游戏里 Shift+F11 也能下载和复制。</div>
     </section>
     <section>
-      <div class="head"><b>联机</b></div>
-      <div class="row"><label for="relay">服务器</label><input id="relay" class="text" placeholder="wss://服务器地址:端口/net（空着就不联机）" spellcheck="false"></div>
-      <div class="row"><label for="pname">玩家名</label><input id="pname" class="text short" maxlength="16" spellcheck="false"><span class="hint" id="namehint"></span></div>
-      <div class="hint warn" id="onlinehint"></div>
-      <div class="hint">填好服务器再开始游戏，进游戏里的"网路"：连着同一个服务器的玩家都在一个局域网大厅里。名字用英文字母、数字、空格、_ 或 -，最多 16 个，不能和别人重名。同一个浏览器只能开一个页面联机。</div>
+      <div class="head"><b>联机</b><label><input type="checkbox" id="onlineon"> 开启联机</label></div>
+      <div class="hint" id="offhint">关着就是单机：战役、遭遇战边玩边下载数据。要和别人联机时再打开。</div>
+      <div id="onlinebox" hidden>
+        <div class="row"><label for="relay">服务器</label><input id="relay" class="text" placeholder="wss://服务器地址:端口/net" spellcheck="false"></div>
+        <div class="row"><label for="pname">玩家名</label><input id="pname" class="text short" maxlength="16" spellcheck="false"><span class="hint" id="namehint"></span></div>
+        <div class="hint warn" id="onlinehint"></div>
+        <div class="hint">填好服务器、下载完游戏数据再开始游戏，进游戏里的"网路"：连着同一个服务器的玩家都在一个局域网大厅里。名字用英文字母、数字、空格、_ 或 -，最多 16 个，不能和别人重名。同一个浏览器只能开一个页面联机。</div>
+      </div>
     </section>
   </div>
 </div>
@@ -171,9 +176,10 @@ const online = onlineSettings();
 env.RA2WEB_MACHINE ??= online.client;          // this browser's own PATH for the game (wasi/main.c machine_path)
 if (q.has('relay')) online.relay = q.get('relay');
 if (q.has('name')) online.name = q.get('name');
+online.on = q.has('online') || localStorage.getItem('ra2web.online') === '1';   // the panel's switch
 let netStatus = null, netWorker = null, onlineOn = false;
 async function goOnline() {
-  if (!online.relay) return;
+  if (!online.relay || !(online.on || immediate)) return;   // at once (&go, no panel) the address alone
   if (!NAME_RE.test(online.name)) { netStatus = { state: 'refused', why: 'bad' }; return; }
   const data = await onlineData().catch(() => ({ ready: false, missing: 0 }));   // all the game data but the movies, here first
   if (!data.ready) { netStatus = { state: 'nodata', missing: data.missing }; log(`[net] ${netText(netStatus)}`); return; }
@@ -349,27 +355,36 @@ $('savesfile').onchange = async () => {
   savesLine();
 };
 // online play needs the game data here first (online.js onlineData): the hint under the relay's
-// address, and the play button holds until then (or until the address is cleared)
+// address, and the play button holds until then (or until the switch is off)
 let onlineReady = false, manifest = null, hintAt = 0, hintPhase = '';
 async function onlineHint() {
   try {
     manifest ??= await manifestFiles();
     const d = await onlineData(manifest);
     onlineReady = d.ready;
-    $('onlinehint').textContent = online.relay && !d.ready ? `联机前要先下载完游戏数据（不含过场动画），还差 ${size(d.missing)}：点上面的“下载全部数据”` : '';
+    $('onlinehint').textContent = online.on && !d.ready ? `联机前要先下载完游戏数据（不含过场动画），还差 ${size(d.missing)}：点上面的“下载全部数据”` : '';
   } catch { onlineReady = false; }
 }
 const onlineInput = () => {
   online.relay = $('relay').value.trim(); online.name = $('pname').value.trim();
-  $('namehint').textContent = online.relay && !NAME_RE.test(online.name) ? '名字不合要求' : '';
+  $('namehint').textContent = online.on && !NAME_RE.test(online.name) ? '名字不合要求' : '';
   saveOnline(online);
   onlineHint();
 };
+const onlineShown = () => { $('onlinebox').hidden = !online.on; $('offhint').hidden = online.on; };
 $('relay').oninput = $('pname').oninput = onlineInput;
+$('onlineon').onchange = () => {
+  online.on = $('onlineon').checked;
+  localStorage.setItem('ra2web.online', online.on ? '1' : '0');
+  $('playhint').textContent = ''; $('playhint').classList.remove('warn');   // what held the play button may be gone
+  onlineShown(); onlineInput();
+};
 $('play').onclick = async () => {
   if (over) { location.reload(); return; }
-  if (online.relay && !onlineReady) {
-    $('playhint').textContent = '要联机，先下载完游戏数据（不含过场动画）；只想单机玩，把联机的服务器地址清空';
+  const why = !online.on ? '' : !online.relay ? '要联机，先填服务器地址' : !NAME_RE.test(online.name) ? '要联机，先起一个合要求的玩家名'
+    : !onlineReady ? '要联机，先下载完游戏数据（不含过场动画）' : '';
+  if (why) {
+    $('playhint').textContent = `${why}；只想单机玩，把“开启联机”关掉`;
     $('playhint').classList.add('warn');
     return;
   }
@@ -419,6 +434,7 @@ else {
   $('movies').checked = q.has('movies') || localStorage.getItem('ra2web.movies') === '1';
   $('full').checked = localStorage.getItem('ra2web.full') !== '0';
   $('relay').value = online.relay; $('pname').value = online.name;
+  $('onlineon').checked = online.on; onlineShown();
   savesLine();
   render(pd.state());
   try {

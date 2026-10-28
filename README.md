@@ -79,9 +79,11 @@ tools/perf-skirmish.sh wasm 150                # a scripted skirmish's frame tim
 ## Online play
 
 Run the relay (`relay/README.md`: locally, or on a server with a certificate),
-put its address and a player name on the start panel, and pick Network in the
-game: everyone on the relay is in one LAN lobby. A browser plays online once
-it has the game data (the start panel's download, movies optional).
+turn on the start panel's "开启联机", put the relay's address and a player name
+there, and pick Network in the game: everyone on the relay is in one LAN lobby.
+A browser plays online once it has the game data (the start panel's download,
+movies optional); with the switch off (the default) the game plays alone,
+reading the data as it goes.
 
 ## Layout
 
