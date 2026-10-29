@@ -2004,6 +2004,7 @@ static void u_GetSystemMetrics(void) {
     case 32: case 33: RET(4, 1);                         /* frames */
     case 36: case 37: RET(4, 1);                         /* SM_CXDOUBLECLK */
     case 43: RET(3, 1);                                  /* SM_CMOUSEBUTTONS */
+    case 68: case 69: RET(4, 1);                         /* SM_CXDRAG, SM_CYDRAG (the game's right-drag radius, 0x69347F): a real Windows gives 4, and 0 made every right click that moved a pixel a drag, whose release does not cancel */
     case 75: RET(1, 1);                                  /* SM_MOUSEWHEELPRESENT */
     case 80: RET(1, 1);                                  /* SM_CMONITORS */
     default: RET(0, 1);
